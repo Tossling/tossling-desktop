@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Crypto test vectors shared with tossling-mobile"
+paths = ['''mac/(Tossy|Tossling)/vectors\.json''']
