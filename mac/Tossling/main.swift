@@ -1320,7 +1320,7 @@ func control(_ kind: String, _ meta: [String: Any]) -> Bool {
         lastID = ""
         writeState()
         log(saved ? L("\(from) отключил одно из устройств: комната сменила ключ, перезапускаюсь", "\(from) disconnected a device: the room has a new key, restarting") : L("не записал новый ключ комнаты в \(configFile)", "could not save the new room key to \(configFile)"))
-        if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { exit(0) } }
+        if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } }
     case "kick":
         guard !conf.isOwner else {
             log(L("\(from) пытался отключить этот Mac, но он создатель комнаты: остаюсь", "\(from) tried to disconnect this Mac, but it created the room: staying"))

@@ -93,7 +93,7 @@ func revokeDevice(_ id: String) {
                     writeState()
                     log(L("отключил \(name): новая комната и ключ\(token == nil ? "" : ", новый токен")", "disconnected \(name): a new room and key\(token == nil ? "" : ", a new token")"))
                     notify(L("\(name) отключён от комнаты\(isLegacy ? ". Часть устройств без ключей: обнови их и отключи ещё раз, если нужно" : "")", "\(name) is disconnected from the room\(isLegacy ? ". Some devices have no keys: update them and disconnect again if needed" : "")"))
-                    if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { exit(0) } }
+                    if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } }
                 }
                 guard !others.isEmpty else { return finish() }
                 let keys = others.compactMapValues(memberKey)
