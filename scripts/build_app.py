@@ -26,7 +26,7 @@ CASK = """cask "tossling" do
   desc "One end-to-end encrypted clipboard for your Macs and Android phone"
   homepage "https://github.com/tossling/tossling-desktop"
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Tossling.app"
   binary "#{{appdir}}/Tossling.app/Contents/Resources/tossling/bin/tossling"
