@@ -1,0 +1,3 @@
+[submodule "jvm/external/tossling-mobile"]
+	path = jvm/external/tossling-mobile
+	url = https://github.com/Tossling/tossling-mobile.git

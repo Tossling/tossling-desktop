@@ -1,0 +1,52 @@
+name: Windows and Linux
+
+on:
+  push:
+    branches: [main]
+    paths: ["jvm/**", ".github/workflows/jvm.yml", "VERSION"]
+  pull_request:
+    paths: ["jvm/**", ".github/workflows/jvm.yml", "VERSION"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: jvm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :protocol:test :app:test --console=plain
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: jvm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:test :app:packageMsi --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tossling-windows-${{ github.run_number }}
+          path: jvm/app/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error

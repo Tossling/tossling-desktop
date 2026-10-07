@@ -195,6 +195,24 @@ The protocol is described in [PROTOCOL.md](https://github.com/tossling/tossling-
 the server repository. `mac/Tossling/vectors.json` is a copy of its `docs/vectors.json`, the same file tossling-mobile
 tests against; `make selftest` checks the Mac code with it. CLI tests run on a temporary `HOME` and never touch the running helper.
 
+### Windows and Linux
+
+`jvm/` is the app for Windows (and Linux later): Kotlin with Compose Desktop, sitting in the tray. It joins a room with
+an invite code from a Mac (`tossling invite`) or creates one on your server and shows the QR code for the phone. Text,
+images and files go both ways; passwords marked by password managers are skipped. It is in early development:
+builds come from CI («Windows and Linux» workflow, an unsigned MSI) and are not released yet.
+
+The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
+
+```bash
+git submodule update --init
+cd jvm
+./gradlew :app:run           # runs on macOS and Linux too, with its data in a separate folder
+./gradlew :app:test          # the live test runs only when TOSSLING_IT_INVITE points at a local server and invite
+```
+
+To work on the protocol and the app together, put `tossling.mobile=../../tossling-mobile` into `jvm/local.properties`.
+
 ## Reporting a vulnerability
 
 See [SECURITY.md](SECURITY.md).
