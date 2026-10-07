@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.kopylovis.tossling.protocol.ClipKind
@@ -290,7 +291,7 @@ private fun OnboardingWindow(store: SettingsStore, onDone: (joined: String?) -> 
         onCloseRequest = onClose,
         title = "Tossling",
         icon = resourcePainter("icon.png"),
-        state = rememberWindowState(size = DpSize(520.dp, 470.dp)),
+        state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(520.dp, 470.dp)),
         resizable = false,
     ) {
         TosslingTheme {
@@ -359,7 +360,7 @@ private fun OnboardingWindow(store: SettingsStore, onDone: (joined: String?) -> 
 @Composable
 private fun PairWindow(payload: String, onClose: () -> Unit) {
     val image = remember(payload) { Qr.image(text = payload).toComposeImageBitmap() }
-    Window(onCloseRequest = onClose, title = L("Подключить телефон", "Connect a Phone"), icon = resourcePainter("icon.png"), state = rememberWindowState(size = DpSize(440.dp, 560.dp)), resizable = false) {
+    Window(onCloseRequest = onClose, title = L("Подключить телефон", "Connect a Phone"), icon = resourcePainter("icon.png"), state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(440.dp, 560.dp)), resizable = false) {
         TosslingTheme {
             Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
@@ -392,7 +393,7 @@ private fun InviteWindow(room: Room, server: String, onClose: () -> Unit) {
             problem = L("Не отправил приглашение: ${error.message}", "Could not send the invite: ${error.message}")
         }
     }
-    Window(onCloseRequest = onClose, title = L("Пригласить компьютер", "Invite a Computer"), icon = resourcePainter("icon.png"), state = rememberWindowState(size = DpSize(520.dp, 380.dp)), resizable = false) {
+    Window(onCloseRequest = onClose, title = L("Пригласить компьютер", "Invite a Computer"), icon = resourcePainter("icon.png"), state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(520.dp, 380.dp)), resizable = false) {
         TosslingTheme {
             Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(

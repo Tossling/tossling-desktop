@@ -77,6 +77,8 @@ class Room(
 
     @Volatile private var lastSent = ""
 
+    @Volatile private var lastSentAt = 0L
+
     @Volatile private var invitation: Pair<String, CompletableDeferred<String>>? = null
 
     val roomState: StateFlow<RoomState> = state.value
@@ -149,6 +151,7 @@ class Room(
             clip == null -> notifier.notify(L("Нечего отправлять: буфер пуст", "Nothing to send: the clipboard is empty"))
             clipboard.isPrivate() -> notifier.notify(L("Не отправил: в буфере пароль или служебные данные", "Did not send: the clipboard holds a password or private data"))
             clip is Clip.Files -> clip.files.forEach { sendFile(it) }
+            !claim(digest = clip.digest, within = DUPLICATE_MS) -> Unit
             else -> prepared(clip)?.let { send(clip = it, seq = contentSeq.incrementAndGet(), announce = true) }
         }
     }
@@ -465,14 +468,21 @@ class Room(
         val clip = clipboard.read() ?: return
         val digest = clip.digest
         lastReceived?.let { (received, at) -> if (digest in received && now() - at < ECHO_MS) return }
-        if (digest == lastSent) return
-        lastSent = digest
+        if (!claim(digest = digest, within = Long.MAX_VALUE)) return
         if (clip is Clip.Files) {
             Log.write("skipped: files go only when asked")
             return
         }
         val ready = prepared(clip) ?: return
         send(clip = ready, seq = contentSeq.incrementAndGet(), announce = false)
+    }
+
+    @Synchronized
+    private fun claim(digest: String, within: Long): Boolean {
+        if (digest == lastSent && now() - lastSentAt < within) return false
+        lastSent = digest
+        lastSentAt = now()
+        return true
     }
 
     private fun prepared(clip: Clip): Clip? = when (clip) {
@@ -690,6 +700,7 @@ class Room(
         private const val SETTLE_MS = 150L
         private const val FIRST_RETRY_MS = 1_000L
         private const val WAKE_CHECK_MS = 5_000L
+        private const val DUPLICATE_MS = 3_000L
         private const val WAKE_GAP_MS = 30_000L
         private const val AUTH_RETRY_MS = 30_000L
         private const val MAX_RETRY_MS = 60_000L

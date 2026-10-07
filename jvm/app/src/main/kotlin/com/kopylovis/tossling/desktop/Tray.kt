@@ -165,15 +165,14 @@ object MenuTheme {
 
     private fun apply(light: Boolean) {
         val text = if (light) "#1A1A1A" else "#FFFFFF"
+        val selection = if (light) "#E5E5E5" else "#414141"
+        val items = listOf("MenuItem", "Menu", "CheckBoxMenuItem", "RadioButtonMenuItem")
         FlatLaf.setGlobalExtraDefaults(
             mapOf(
                 "@menuBackground" to if (light) "#F9F9F9" else "#2B2B2B",
-                "@menuSelectionBackground" to if (light) "#E5E5E5" else "#414141",
+                "@menuSelectionBackground" to selection,
                 "@menuItemMargin" to "5,12,5,12",
-                "MenuItem.selectionForeground" to text,
-                "Menu.selectionForeground" to text,
-                "CheckBoxMenuItem.selectionForeground" to text,
-            ),
+            ) + items.flatMap { listOf("$it.selectionBackground" to selection, "$it.selectionForeground" to text) },
         )
         runCatching { if (light) FlatLightLaf.setup() else FlatDarkLaf.setup() }.onFailure { Log.write("could not set up the menu look: ${it.message}") }
     }
