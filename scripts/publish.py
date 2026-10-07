@@ -1,19 +1,24 @@
 import base64
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "cli", "lib"))
 from tosslinglib import version
+from build_app import DOWNLOAD_URL, NOTES_URL, SPARKLE_ACCOUNT, SPARKLE_DIR
 
 OUT = os.path.join(ROOT, "build", "release")
 REPO = "Tossling/tossling-desktop"
 TAP = ("Tossling/homebrew-tap", "Casks/tossling.rb")
 FEED = ("kopylovis/landing-web", "public/tossling/appcast.xml")
+WINDOWS_FEED = ("kopylovis/landing-web", "public/tossling/windows.json")
 
 
 def run(*args, capture=True):
@@ -38,9 +43,58 @@ def put(repo, path, source, message):
         os.remove(f.name)
 
 
+def windows(v, tag):
+    print("Waiting for the Windows installer from CI…")
+    run_id = None
+    for _ in range(60):
+        runs = json.loads(run("gh", "run", "list", "-R", REPO, "--workflow", "jvm.yml", "--branch", tag, "--json", "databaseId", "--limit", "1"))
+        if runs:
+            run_id = runs[0]["databaseId"]
+            break
+        time.sleep(10)
+    if run_id is None:
+        sys.exit(f"No Windows build started for {tag}: run scripts/publish.py --windows-only once it has.")
+    if subprocess.run(["gh", "run", "watch", str(run_id), "-R", REPO, "--exit-status", "--interval", "30"], capture_output=True).returncode != 0:
+        sys.exit(f"The Windows build {run_id} failed: fix it, rerun it, then scripts/publish.py --windows-only.")
+    name = f"Tossling-{v}.msi"
+    artifact = run("gh", "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts", "--jq", f'.artifacts[] | select(.name == "{name}") | .id').strip()
+    if not artifact:
+        sys.exit(f"The Windows build {run_id} has no {name}.")
+    with tempfile.TemporaryDirectory() as tmp:
+        msi = os.path.join(tmp, name)
+        with open(msi, "wb") as f:
+            if subprocess.run(["gh", "api", f"repos/{REPO}/actions/artifacts/{artifact}/zip"], stdout=f).returncode != 0:
+                sys.exit(f"Could not download {name}.")
+        signed = run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, msi)
+        match = re.search(r'edSignature="([^"]+)"', signed)
+        if not match:
+            sys.exit("sign_update did not return a signature.")
+        with open(msi, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+        stable = os.path.join(tmp, "Tossling.msi")
+        shutil.copy(msi, stable)
+        run("gh", "release", "upload", tag, msi, stable, "-R", REPO, "--clobber")
+        print(f"{name} added to {tag}")
+        feed = os.path.join(tmp, "windows.json")
+        with open(feed, "w") as f:
+            json.dump({
+                "version": v,
+                "url": DOWNLOAD_URL.format(version=v, name=name),
+                "size": os.path.getsize(msi),
+                "sha256": digest,
+                "signature": match.group(1),
+                "notes": NOTES_URL.format(version=v),
+            }, f, indent=2)
+        put(*WINDOWS_FEED, feed, f"Tossling {v} for Windows")
+    print("Windows feed updated: Tossling on Windows will offer the update once the site is rebuilt")
+
+
 def main():
     v = version()
     tag = f"v{v}"
+    if "--windows-only" in sys.argv:
+        windows(v, tag)
+        return
     image = os.path.join(OUT, f"Tossling-{v}.dmg")
     cask = os.path.join(OUT, "tossling.rb")
     feed = os.path.join(OUT, "appcast.xml")
@@ -67,6 +121,7 @@ def main():
     print("Homebrew cask updated")
     put(*FEED, feed, f"Tossling {v} appcast")
     print("Appcast updated: Tossling on other Macs will offer the update once the site is rebuilt")
+    windows(v, tag)
 
 
 if __name__ == "__main__":

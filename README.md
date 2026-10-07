@@ -198,9 +198,15 @@ tests against; `make selftest` checks the Mac code with it. CLI tests run on a t
 ### Windows and Linux
 
 `jvm/` is the app for Windows (and Linux later): Kotlin with Compose Desktop, sitting in the tray. It joins a room with
-an invite code from a Mac (`tossling invite`) or creates one on your server and shows the QR code for the phone. Text,
-images and files go both ways; passwords marked by password managers are skipped. It is in early development:
-builds come from CI («Windows and Linux» workflow, an unsigned MSI) and are not released yet.
+an invite from another computer (Devices → Invite a Computer, or `tossling invite` on a Mac), or creates a room on your
+server and shows the QR code for the phone. Text, images, files and folders (as a zip) go both ways; passwords marked by
+password managers are skipped. Win+Shift+C copies the selection and sends it, and Explorer gets «Send via Tossling»
+for files and folders. Updates come from a feed signed with the same Ed25519 key as the Mac appcast.
+
+`Tossling-<version>.msi` in [Releases](https://github.com/tossling/tossling-desktop/releases) installs for the current
+user, no administrator rights needed. It is not code-signed yet, so Windows asks to confirm the first start
+(More info → Run anyway). Every push builds the MSI in the «Windows and Linux» workflow; `make publish` adds it to the
+release and updates the Windows feed.
 
 The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
 
