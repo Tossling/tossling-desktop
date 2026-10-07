@@ -1,12 +1,15 @@
 [versions]
 compose = "1.12.1"
 coroutines = "1.11.0"
+dbus-java = "5.1.1"
 flatlaf = "3.7.2"
 jna = "5.19.1"
 zxing = "3.5.4"
 
 [libraries]
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbus-java" }
+dbus-java-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbus-java" }
 flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
 jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }

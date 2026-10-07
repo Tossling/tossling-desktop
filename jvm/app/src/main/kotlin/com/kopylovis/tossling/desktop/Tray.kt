@@ -17,25 +17,27 @@ import java.awt.event.MouseEvent
 import java.awt.geom.Ellipse2D
 import java.awt.image.BaseMultiResolutionImage
 import java.awt.image.BufferedImage
-import javax.swing.JCheckBoxMenuItem
-import javax.swing.JComponent
 import javax.swing.JDialog
-import javax.swing.JMenu
-import javax.swing.JMenuItem
 import javax.swing.JPopupMenu
 import javax.swing.SwingUtilities
 import javax.swing.UIManager
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 
-class AppTray(private val build: JPopupMenu.() -> Unit) {
+interface TrayHost {
+    fun install(): Boolean
+    fun remove()
+    fun notify(text: String)
+}
+
+class AppTray(private val build: () -> List<MenuEntry>, private val onOpen: () -> Unit) : TrayHost {
 
     private var icon: TrayIcon? = null
 
-    fun install() {
+    override fun install(): Boolean {
         if (!SystemTray.isSupported()) {
             Log.write("this desktop has no system tray")
-            return
+            return false
         }
         MenuTheme.ensure()
         val trayIcon = TrayIcon(glyph(), "Tossling").apply {
@@ -47,14 +49,15 @@ class AppTray(private val build: JPopupMenu.() -> Unit) {
         }
         SystemTray.getSystemTray().add(trayIcon)
         icon = trayIcon
+        return true
     }
 
-    fun remove() {
+    override fun remove() {
         icon?.let { SystemTray.getSystemTray().remove(it) }
         icon = null
     }
 
-    fun notify(text: String) {
+    override fun notify(text: String) {
         icon?.displayMessage("Tossling", text, TrayIcon.MessageType.NONE)
     }
 
@@ -70,7 +73,8 @@ class AppTray(private val build: JPopupMenu.() -> Unit) {
             background = Color(0, 0, 0, 0)
             setBounds(point.x, point.y, 1, 1)
         }
-        val menu = JPopupMenu().apply(build)
+        onOpen()
+        val menu = JPopupMenu().apply { render(build()) }
         menu.addPopupMenuListener(object : PopupMenuListener {
             override fun popupMenuWillBecomeVisible(event: PopupMenuEvent) = Unit
             override fun popupMenuWillBecomeInvisible(event: PopupMenuEvent) = anchor.dispose()
@@ -81,33 +85,6 @@ class AppTray(private val build: JPopupMenu.() -> Unit) {
         menu.show(anchor, 0, 0)
         menu.requestFocusInWindow()
     }
-}
-
-fun JComponent.item(text: String, enabled: Boolean = true, action: () -> Unit = {}) {
-    add(JMenuItem(text).apply {
-        putClientProperty("html.disable", true)
-        isEnabled = enabled
-        addActionListener { action() }
-    })
-}
-
-fun JComponent.check(text: String, checked: Boolean, action: (Boolean) -> Unit) {
-    add(JCheckBoxMenuItem(text, checked).apply {
-        putClientProperty("html.disable", true)
-        addActionListener { action(isSelected) }
-    })
-}
-
-fun JComponent.submenu(text: String, enabled: Boolean = true, build: JMenu.() -> Unit) {
-    add(JMenu(text).apply {
-        putClientProperty("html.disable", true)
-        isEnabled = enabled
-        build()
-    })
-}
-
-fun JComponent.separator() {
-    add(JPopupMenu.Separator())
 }
 
 object TrayGlyph {

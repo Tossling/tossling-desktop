@@ -18,6 +18,8 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(desktopLibs.kotlinx.coroutines.swing)
+    implementation(desktopLibs.dbus.java.core)
+    implementation(desktopLibs.dbus.java.unixsocket)
     implementation(desktopLibs.flatlaf)
     implementation(desktopLibs.jna.platform)
     implementation(desktopLibs.zxing.core)
@@ -29,14 +31,14 @@ compose.desktop {
     application {
         mainClass = "com.kopylovis.tossling.desktop.MainKt"
         javaHome = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }.get().metadata.installationPath.asFile.absolutePath
-        jvmArgs += listOf("-Xmx256m", "-XX:+UseSerialGC", "-Dtossling.version=$appVersion")
+        jvmArgs += listOf("-Xmx256m", "-XX:+UseSerialGC", "-Dtossling.version=$appVersion", "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Deb)
             packageName = "Tossling"
             packageVersion = appVersion
             vendor = "Tossling"
             description = "One clipboard for your computers and phone"
-            modules("java.naming", "jdk.crypto.ec", "jdk.unsupported")
+            modules("java.naming", "jdk.crypto.ec", "jdk.security.auth", "jdk.unsupported")
             windows {
                 menuGroup = "Tossling"
                 perUserInstall = true

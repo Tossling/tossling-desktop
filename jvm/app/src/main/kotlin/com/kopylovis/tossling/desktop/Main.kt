@@ -57,22 +57,19 @@ import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
+import java.awt.Toolkit
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.imageio.ImageIO
-import javax.swing.JMenu
 import javax.swing.JOptionPane
-import javax.swing.JPopupMenu
 import javax.swing.SwingUtilities
-import javax.swing.Timer
-import javax.swing.event.MenuEvent
-import javax.swing.event.MenuListener
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     System.setProperty("apple.awt.UIElement", "true")
+    if (Platform.os == Os.LINUX) nameTheWindows()
     val sending = args.dropWhile { it != "--send" }.drop(1)
     if (sending.isNotEmpty()) Inbox.post(paths = sending)
     if (!SingleInstance.acquire()) {
@@ -84,7 +81,7 @@ fun main(args: Array<String>) {
     val clipboard = systemClipboard()
     Log.write("Tossling ${Platform.version} on ${System.getProperty("os.name")}, data in ${Platform.home}")
     val screens = Screens(onboarding = MutableStateFlow(!store.settings.value.isConfigured))
-    lateinit var tray: AppTray
+    lateinit var tray: TrayHost
     val notifier = Notifier { text -> tray.notify(text) }
     val room = Room(store = store, clipboard = clipboard, history = history, notifier = notifier)
     val updates = Updates(notifier = notifier, scope = tasks)
@@ -92,8 +89,10 @@ fun main(args: Array<String>) {
         tray.remove()
         exitProcess(0)
     })
-    tray = AppTray { menu.build(this) }
-    SwingUtilities.invokeAndWait(tray::install)
+    tray = if (Platform.os == Os.LINUX) LinuxTray(build = menu::build, onOpen = menu::opened) else AppTray(build = menu::build, onOpen = menu::opened)
+    SwingUtilities.invokeAndWait {
+        if (!tray.install() && tray is LinuxTray) tray = AppTray(build = menu::build, onOpen = menu::opened).apply { install() }
+    }
     ExplorerMenu.apply()
     Inbox.watch { files ->
         if (store.settings.value.isConfigured) room.sendFiles(files) else tray.notify(L("Сначала войди в комнату", "Join a room first"))
@@ -152,12 +151,11 @@ private class TrayMenu(
     private val onQuit: () -> Unit,
 ) {
 
-    fun build(menu: JPopupMenu) {
-        room.probe()
-        menu.trayMenu()
-    }
+    fun build(): List<MenuEntry> = menuOf { trayMenu() }
 
-    private fun JPopupMenu.trayMenu() {
+    fun opened() = room.probe()
+
+    private fun MenuBuilder.trayMenu() {
         val settings = store.settings.value
         val time = DateTimeFormatter.ofPattern("HH:mm")
         item(text = "Tossling ${Platform.version}", enabled = false)
@@ -196,24 +194,7 @@ private class TrayMenu(
             }
             dialog.files.takeIf { it.isNotEmpty() }?.let { room.sendFiles(it.toList()) }
         }
-        submenu(text = L("Устройства", "Devices"), enabled = settings.isConfigured) {
-            devices()
-            var shown = presence()
-            val refresh = Timer(REFRESH_MS) {
-                val current = presence()
-                if (isPopupMenuVisible && current != shown) {
-                    shown = current
-                    removeAll()
-                    devices()
-                    popupMenu.pack()
-                }
-            }
-            addMenuListener(object : MenuListener {
-                override fun menuSelected(event: MenuEvent) = refresh.start()
-                override fun menuDeselected(event: MenuEvent) = refresh.stop()
-                override fun menuCanceled(event: MenuEvent) = refresh.stop()
-            })
-        }
+        submenu(text = L("Устройства", "Devices"), enabled = settings.isConfigured, live = ::presence) { devices() }
         if (settings.isPaused) {
             item(text = L("Снова отправлять", "Resume Sending")) { store.update { it.copy(pausedUntil = 0.0) } }
         } else {
@@ -232,7 +213,7 @@ private class TrayMenu(
             check(text = L("Отправлять картинки", "Send Images"), checked = settings.images) { on -> store.update { it.copy(images = on) } }
             check(text = L("Уведомления", "Notifications"), checked = settings.notifications) { on -> store.update { it.copy(notifications = on) } }
             if (Autostart.isSupported) {
-                check(text = L("Запускать вместе с Windows", "Start with Windows"), checked = settings.autostart) { on -> store.update { it.copy(autostart = on) } }
+                check(text = if (Platform.os == Os.WINDOWS) L("Запускать вместе с Windows", "Start with Windows") else L("Запускать при входе", "Start at Login"), checked = settings.autostart) { on -> store.update { it.copy(autostart = on) } }
             }
             submenu(text = L("Язык", "Language")) {
                 listOf("auto" to L("Как в системе", "System"), "en" to "English", "ru" to "Русский").forEach { (code, title) ->
@@ -249,7 +230,7 @@ private class TrayMenu(
         item(text = L("Выйти", "Quit"), action = onQuit)
     }
 
-    private fun JMenu.devices() {
+    private fun MenuBuilder.devices() {
         val settings = store.settings.value
         val now = System.currentTimeMillis()
         val others = room.roomState.value.members.values.filter { it.id != settings.deviceId }.sortedBy { it.since }
@@ -461,8 +442,14 @@ private fun resourcePainter(name: String): Painter = remember(name) {
     BitmapPainter(Room::class.java.getResourceAsStream("/$name")!!.use(ImageIO::read).toComposeImageBitmap())
 }
 
+private fun nameTheWindows() {
+    runCatching {
+        val toolkit = Toolkit.getDefaultToolkit()
+        toolkit.javaClass.getDeclaredField("awtAppClassName").apply { isAccessible = true }.set(toolkit, "Tossling")
+    }.onFailure { Log.write("could not name the windows: ${it.message}") }
+}
+
 private val tasks = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 private const val RECENT = 10
-private const val REFRESH_MS = 700
 private const val TITLE = 48
