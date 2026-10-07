@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -77,9 +76,7 @@ def windows(v, tag):
         signed_manifest = re.search(r'edSignature="([^"]+)"', run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, manifest))
         if not signed_manifest:
             sys.exit("sign_update did not sign the manifest.")
-        stable = os.path.join(tmp, "Tossling.msi")
-        shutil.copy(msi, stable)
-        run("gh", "release", "upload", tag, msi, stable, "-R", REPO, "--clobber")
+        run("gh", "release", "upload", tag, msi, "-R", REPO, "--clobber")
         print(f"{name} added to {tag}")
         feed = os.path.join(tmp, "windows.json")
         with open(feed, "w") as f:
@@ -119,10 +116,7 @@ def main():
     run("git", "-C", ROOT, "push", "-q", "origin", "HEAD")
     run("git", "-C", ROOT, "tag", "-a", tag, "-m", f"Tossling Desktop {v}")
     run("git", "-C", ROOT, "push", "-q", "origin", tag)
-    with tempfile.TemporaryDirectory() as tmp:
-        stable = os.path.join(tmp, "Tossling.dmg")
-        shutil.copy(image, stable)
-        run("gh", "release", "create", tag, image, stable, "-R", REPO, "--title", f"Tossling Desktop {v}", "--notes-file", notes)
+    run("gh", "release", "create", tag, image, "-R", REPO, "--title", f"Tossling Desktop {v}", "--notes-file", notes)
     print(f"Released {tag}")
     put(*TAP, cask, f"Tossling {v}")
     print("Homebrew cask updated")
