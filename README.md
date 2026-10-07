@@ -221,13 +221,14 @@ workflow; `make publish` adds it to the release and updates the Windows feed.
 On Linux `tossling_<version>_amd64.deb` (or `_arm64.deb` for ARM) installs into `/opt/tossling` with an entry in the
 applications menu (Ubuntu 20.04 or newer, Debian, Mint, Pop!_OS: `sudo apt install ./tossling_<version>_amd64.deb`), and
 `Tossling-<version>-linux-x64.tar.gz` (`-linux-arm64.tar.gz`) runs on any distribution without installing
-(`Tossling/bin/Tossling`). Without a place for the icon in the panel Tossling opens a window that says how to get one. The icon goes to the panel as a
-StatusNotifierItem with a native menu: KDE, Xfce and Cinnamon show it as is, GNOME needs the AppIndicator extension,
-which Ubuntu has built in. Tossling adds «Send via Tossling» to Nautilus and Caja (Scripts), Nemo, Dolphin and Thunar, starts at login
-through `~/.config/autostart/tossling.desktop`, and on X11 Super+Shift+C (Ctrl+Alt+Shift+C when it is taken) sends the
-selected text. Wayland has no global shortcuts for apps: bind `/opt/tossling/bin/Tossling --send-clipboard` to a key in
-the system settings. On Wayland Tossling runs through XWayland and still sees what you copy (checked on Ubuntu 20.04
-with GNOME 3.36). There are no automatic updates on Linux yet: install the new `.deb` from Releases over the old one.
+(`Tossling/bin/Tossling`). Without a place for the icon in the panel Tossling opens a window that says how to get one.
+The icon goes to the panel as a StatusNotifierItem with a native menu: KDE, Xfce and Cinnamon show it as is, GNOME needs
+the AppIndicator extension, which Ubuntu has built in. Tossling adds «Send via Tossling» to Nautilus and Caja (Scripts),
+Nemo, Dolphin and Thunar, starts at login through `~/.config/autostart/tossling.desktop`, and on X11 Super+Shift+C
+(Ctrl+Alt+Shift+C when it is taken) sends the selected text. Wayland has no global shortcuts for apps: bind
+`/opt/tossling/bin/Tossling --send-clipboard` to a key in the system settings. On Wayland Tossling runs through XWayland
+and still sees what you copy (checked on Ubuntu 20.04 with GNOME 3.36). There are no automatic updates on Linux yet:
+install the new `.deb` from Releases over the old one.
 
 The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
 
