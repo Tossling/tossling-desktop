@@ -614,6 +614,11 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     static func icon() -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
             NSColor.black.setFill()
+            let fill = 0.85
+            let transform = NSAffineTransform()
+            transform.translateX(by: 9 * (1 - fill), yBy: 9 * (1 - fill))
+            transform.scale(by: fill)
+            transform.concat()
             let dot = 1.3
             for (x, y) in [(5.0, 18.0), (6.47, 14.31), (8.6, 10.89), (11.8, 8.63), (15.72, 8.89)] {
                 NSBezierPath(ovalIn: NSRect(x: x - 3 - dot, y: y - 3 - dot, width: 2 * dot, height: 2 * dot)).fill()
