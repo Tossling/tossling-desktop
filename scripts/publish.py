@@ -71,6 +71,12 @@ def windows(v, tag):
             sys.exit("sign_update did not return a signature.")
         with open(msi, "rb") as f:
             digest = hashlib.sha256(f.read()).hexdigest()
+        manifest = os.path.join(tmp, "manifest.txt")
+        with open(manifest, "w") as f:
+            f.write(f"tossling-windows-update\n{v}\n{os.path.getsize(msi)}\n{digest}\n")
+        signed_manifest = re.search(r'edSignature="([^"]+)"', run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, manifest))
+        if not signed_manifest:
+            sys.exit("sign_update did not sign the manifest.")
         stable = os.path.join(tmp, "Tossling.msi")
         shutil.copy(msi, stable)
         run("gh", "release", "upload", tag, msi, stable, "-R", REPO, "--clobber")
@@ -83,6 +89,7 @@ def windows(v, tag):
                 "size": os.path.getsize(msi),
                 "sha256": digest,
                 "signature": match.group(1),
+                "manifest_signature": signed_manifest.group(1),
                 "notes": NOTES_URL.format(version=v),
             }, f, indent=2)
         put(*WINDOWS_FEED, feed, f"Tossling {v} for Windows")

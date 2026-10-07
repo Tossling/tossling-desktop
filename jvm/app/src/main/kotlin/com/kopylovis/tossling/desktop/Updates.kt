@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.net.HttpURLConnection
@@ -27,7 +28,8 @@ data class Release(
     val url: String,
     val size: Long,
     val sha256: String,
-    val signature: String,
+    val signature: String = "",
+    @SerialName("manifest_signature") val manifestSignature: String = "",
     val notes: String = "",
 )
 
@@ -134,28 +136,41 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
         fun isGenuine(file: File, release: Release, publicKey: String = PUBLIC_KEY): Boolean = verify(file = file, release = release, publicKey = publicKey) == null
 
         fun verify(file: File, release: Release, publicKey: String = PUBLIC_KEY): String? = try {
+            val sha = lazy { digestOf(file) }
+            when {
+                release.manifestSignature.isEmpty() -> "the feed has no manifest signature"
+                file.length() != release.size -> "${file.length()} bytes instead of ${release.size}"
+                !sha.value.equals(release.sha256, ignoreCase = true) -> "SHA-256 ${sha.value} instead of ${release.sha256}"
+                !signs(message = manifest(release), signature = release.manifestSignature, publicKey = publicKey) -> "the signature does not match"
+                else -> null
+            }
+        } catch (error: Exception) {
+            error.toString()
+        }
+
+        fun manifest(release: Release): ByteArray = "tossling-windows-update\n${release.version}\n${release.size}\n${release.sha256.lowercase()}\n".toByteArray()
+
+        private fun signs(message: ByteArray, signature: String, publicKey: String): Boolean {
             val prefix = ED25519_PREFIX.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             val key = KeyFactory.getInstance("Ed25519").generatePublic(X509EncodedKeySpec(prefix + Base64.getDecoder().decode(publicKey)))
-            val verifier = Signature.getInstance("Ed25519").apply { initVerify(key) }
+            return Signature.getInstance("Ed25519").run {
+                initVerify(key)
+                update(message)
+                verify(Base64.getDecoder().decode(signature))
+            }
+        }
+
+        private fun digestOf(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
             file.inputStream().buffered().use { input ->
                 val buffer = ByteArray(BUFFER)
                 while (true) {
                     val read = input.read(buffer)
                     if (read < 0) break
-                    verifier.update(buffer, 0, read)
                     digest.update(buffer, 0, read)
                 }
             }
-            val sha = digest.digest().joinToString(separator = "") { "%02x".format(it) }
-            when {
-                file.length() != release.size -> "${file.length()} bytes instead of ${release.size}"
-                !sha.equals(release.sha256, ignoreCase = true) -> "SHA-256 $sha instead of ${release.sha256}"
-                !verifier.verify(Base64.getDecoder().decode(release.signature)) -> "the signature does not match"
-                else -> null
-            }
-        } catch (error: Exception) {
-            error.toString()
+            return digest.digest().joinToString(separator = "") { "%02x".format(it) }
         }
 
         fun isNewer(candidate: String, current: String): Boolean {

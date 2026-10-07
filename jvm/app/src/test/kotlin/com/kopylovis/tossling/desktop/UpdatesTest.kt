@@ -32,20 +32,30 @@ class UpdatesTest {
         val pair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val publicKey = Base64.getEncoder().encodeToString(pair.public.encoded.takeLast(32).toByteArray())
         val installer = File(dir, "Tossling.msi").apply { writeBytes(ByteArray(200_000) { (it * 7).toByte() }) }
-        val signature = Signature.getInstance("Ed25519").run {
-            initSign(pair.private)
-            update(installer.readBytes())
-            Base64.getEncoder().encodeToString(sign())
-        }
         val sha = MessageDigest.getInstance("SHA-256").digest(installer.readBytes()).joinToString(separator = "") { "%02x".format(it) }
-        val release = Release(version = "0.4.0", url = "https://github.com/x", size = installer.length(), sha256 = sha, signature = signature)
-        assertTrue(Updates.isGenuine(file = installer, release = release, publicKey = publicKey))
+        val unsigned = Release(version = "0.4.1", url = "https://github.com/x", size = installer.length(), sha256 = sha)
+        val release = unsigned.copy(manifestSignature = sign(pair = pair, message = Updates.manifest(unsigned)))
+        assertEquals(null, Updates.verify(file = installer, release = release, publicKey = publicKey))
+        assertFalse(Updates.isGenuine(file = installer, release = unsigned, publicKey = publicKey))
+        assertFalse(Updates.isGenuine(file = installer, release = release.copy(version = "9.9.9"), publicKey = publicKey))
         assertFalse(Updates.isGenuine(file = installer, release = release.copy(sha256 = "0".repeat(64)), publicKey = publicKey))
         assertFalse(Updates.isGenuine(file = installer, release = release.copy(size = 1), publicKey = publicKey))
         val other = Base64.getEncoder().encodeToString(KeyPairGenerator.getInstance("Ed25519").generateKeyPair().public.encoded.takeLast(32).toByteArray())
-        assertFalse(Updates.isGenuine(file = installer, release = release, publicKey = other))
+        assertEquals("the signature does not match", Updates.verify(file = installer, release = release, publicKey = other))
         installer.appendBytes(byteArrayOf(1))
         assertFalse(Updates.isGenuine(file = installer, release = release.copy(size = installer.length()), publicKey = publicKey))
+    }
+
+    @Test
+    fun signsTheSameManifestAsThePublishScript() {
+        val release = Release(version = "0.4.1", url = "https://github.com/x", size = 5, sha256 = "ABC")
+        assertEquals("tossling-windows-update\n0.4.1\n5\nabc\n", Updates.manifest(release).decodeToString())
+    }
+
+    private fun sign(pair: java.security.KeyPair, message: ByteArray): String = Signature.getInstance("Ed25519").run {
+        initSign(pair.private)
+        update(message)
+        Base64.getEncoder().encodeToString(sign())
     }
 
     @Test
