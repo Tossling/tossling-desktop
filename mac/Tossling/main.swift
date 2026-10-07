@@ -170,6 +170,33 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
         check(name + " open", (try? Data(contentsOf: back)) == plain)
         [src, out, back, given].forEach { try? FileManager.default.removeItem(at: $0) }
     }
+    let sealedWith: (Data, Data, Data) -> String? = { plain, key, nonce in
+        (try? AES.GCM.Nonce(data: nonce)).flatMap { try? AES.GCM.seal(plain, using: SymmetricKey(data: key), nonce: $0).combined?.base64EncodedString() }
+    }
+    let opened: (String, Data) -> Data? = { sealed, key in
+        Data(base64Encoded: sealed).flatMap { try? AES.GCM.SealedBox(combined: $0) }.flatMap { try? AES.GCM.open($0, using: SymmetricKey(data: key)) }
+    }
+    for v in vectors["invite"] as? [[String: String]] ?? [] {
+        let code = v["code"] ?? ""
+        let name = "invite \(code)"
+        check(name + " code", normalizedCode(code) == v["normalized"])
+        check(name + " topic", inviteTopic(code, prefix: "tossling-") == v["topic"] && inviteTopic(code, prefix: "tossy-") == v["legacy_topic"])
+        let key = inviteKey(code).withUnsafeBytes { Data($0) }
+        check(name + " key", key.base64EncodedString() == v["key"])
+        let plain = Data((v["plain"] ?? "").utf8)
+        check(name + " seal", Data(base64Encoded: v["nonce"] ?? "").flatMap { sealedWith(plain, key, $0) } == v["sealed"])
+        check(name + " open", opened(v["sealed"] ?? "", key) == plain)
+    }
+    for v in vectors["envelope"] as? [[String: String]] ?? [] {
+        let name = "envelope \(v["plain"]?.prefix(40) ?? "")"
+        guard let key = Data(base64Encoded: v["key"] ?? ""), let nonce = Data(base64Encoded: v["nonce"] ?? "") else {
+            check(name, false)
+            continue
+        }
+        let plain = Data((v["plain"] ?? "").utf8)
+        check(name + " seal", sealedWith(plain, key, nonce) == v["sealed"])
+        check(name + " open", opened(v["sealed"] ?? "", key) == plain)
+    }
     exit(failed == 0 ? 0 : 1)
 }
 
