@@ -73,8 +73,8 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
     }
 
     private suspend fun check(userInitiated: Boolean) {
-        val release = withContext(Dispatchers.IO) { SyncJson.decodeFromString(Release.serializer(), fetch(FEED_URL).decodeToString()) }
-        if (!isNewer(release.version, Platform.version)) {
+        val release = withContext(Dispatchers.IO) { fetch(FEED_URL)?.let { SyncJson.decodeFromString(Release.serializer(), it.decodeToString()) } }
+        if (release == null || !isNewer(release.version, Platform.version)) {
             _available.value = null
             if (userInitiated) notifier.notify(L("Стоит последняя версия ${Platform.version}", "Tossling ${Platform.version} is the latest version"))
             return
@@ -157,9 +157,10 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
 
         private fun parts(version: String): List<Int>? = version.trim().removePrefix("v").split('.').map { it.toIntOrNull() ?: return null }
 
-        private fun fetch(url: String): ByteArray {
+        private fun fetch(url: String): ByteArray? {
             val connection = open(url)
             try {
+                if (connection.responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) throw IllegalStateException("HTTP ${connection.responseCode}")
                 return connection.inputStream.use { it.readBytes() }
             } finally {
