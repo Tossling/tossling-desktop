@@ -79,5 +79,6 @@ tasks.register<Copy>("windowsRelease") {
     from(layout.buildDirectory.dir("compose/binaries/main/msi"))
     include("*.msi")
     into(layout.buildDirectory.dir("release"))
-    rename { "Tossling-$appVersion.msi" }
+    val fileName = "Tossling-$appVersion.msi"
+    rename { fileName }
 }
