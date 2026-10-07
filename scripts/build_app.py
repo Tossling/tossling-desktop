@@ -193,6 +193,19 @@ def sign(identity):
     return developer_id
 
 
+def check_notary():
+    r = subprocess.run(["xcrun", "notarytool", "history", "--keychain-profile", NOTARY_PROFILE], capture_output=True, text=True)
+    if r.returncode == 0:
+        return
+    if "No Keychain password item found" in r.stderr + r.stdout:
+        sys.exit(
+            f"The notarization profile {NOTARY_PROFILE} cannot be read. Usually the Mac is locked (the display went off) and the "
+            "keychain hides it until you unlock: unlock the Mac and run again. If it still fails, store it again: "
+            f"xcrun notarytool store-credentials {NOTARY_PROFILE} --key <AuthKey.p8> --key-id <id> --issuer <issuer>"
+        )
+    sys.exit(f"notarytool cannot use the profile {NOTARY_PROFILE}:\n{(r.stderr or r.stdout)[-2000:]}")
+
+
 def submit(path):
     out = run("xcrun", "notarytool", "submit", path, "--keychain-profile", NOTARY_PROFILE, "--wait")
     if "status: Accepted" not in out:
@@ -250,6 +263,8 @@ def appcast(image, build_number):
 
 def main():
     release = "--release" in sys.argv
+    if release:
+        check_notary()
     build_number = build()
     identity = pick_identity()
     developer_id = sign(identity)
