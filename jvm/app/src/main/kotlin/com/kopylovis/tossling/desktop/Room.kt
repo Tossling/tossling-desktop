@@ -16,6 +16,7 @@ import com.kopylovis.tossling.protocol.network.NtfyEvent
 import com.kopylovis.tossling.protocol.network.NtfyException
 import com.kopylovis.tossling.protocol.serverMoveTarget
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,7 +55,7 @@ class Room(
     private val downloads: () -> File = { Platform.downloads },
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error -> Log.write("failed: $error") })
     private val state = JsonFile(file = stateFile, serializer = RoomState.serializer(), empty = RoomState())
     private val events = Channel<NtfyEvent>(capacity = Channel.UNLIMITED)
     private val changes = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -488,6 +489,7 @@ class Room(
 
     private suspend fun sendFile(file: File) {
         val name = file.name
+        Log.write("→ room: sending ${file.path}")
         if (!file.isFile) {
             notifier.notify(L("Папки пока не отправляю: «$name»", "Folders do not go yet: «$name»"))
             return

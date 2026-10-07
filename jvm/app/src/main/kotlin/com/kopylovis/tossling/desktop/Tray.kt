@@ -1,5 +1,8 @@
 package com.kopylovis.tossling.desktop
 
+import com.formdev.flatlaf.FlatDarkLaf
+import com.formdev.flatlaf.FlatLaf
+import com.formdev.flatlaf.FlatLightLaf
 import com.sun.jna.platform.win32.Advapi32Util
 import com.sun.jna.platform.win32.WinReg
 import java.awt.Color
@@ -21,7 +24,6 @@ import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JPopupMenu
 import javax.swing.SwingUtilities
-import javax.swing.UIManager
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 
@@ -34,7 +36,7 @@ class AppTray(private val build: JPopupMenu.() -> Unit) {
             Log.write("this desktop has no system tray")
             return
         }
-        if (Platform.os == Os.WINDOWS) runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
+        MenuTheme.apply()
         val size = SystemTray.getSystemTray().trayIconSize.width.coerceAtLeast(16)
         val trayIcon = TrayIcon(TrayGlyph.image(size = size), "Tossling").apply {
             addMouseListener(object : MouseAdapter() {
@@ -108,8 +110,9 @@ fun JComponent.separator() {
 object TrayGlyph {
 
     private val DOTS = listOf(5.0 to 18.0, 6.47 to 14.31, 8.6 to 10.89, 11.8 to 8.63, 15.72 to 8.89)
-    private const val DOT = 1.55
-    private const val BALL = 3.5
+    private const val DOT = 1.7
+    private const val BALL = 3.8
+    private const val FILL = 0.8
     private val SCALES = listOf(1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
 
     fun image(size: Int): Image = BaseMultiResolutionImage(*SCALES.map { draw(size = Math.round(size * it).toInt()) }.toTypedArray())
@@ -119,22 +122,46 @@ object TrayGlyph {
         val graphics = image.createGraphics()
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
         graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
-        graphics.color = if (lightTaskbar()) Color(0x1F, 0x1F, 0x1F) else Color.WHITE
-        graphics.scale(size / 18.0, size / 18.0)
+        graphics.color = if (SystemTheme.isLight) Color(0x1F, 0x1F, 0x1F) else Color.WHITE
+        graphics.translate(size * (1 - FILL) / 2, size * (1 - FILL) / 2)
+        graphics.scale(size * FILL / 18.0, size * FILL / 18.0)
         DOTS.forEach { (x, y) -> graphics.fill(Ellipse2D.Double(x - 3 - DOT, y - 3 - DOT, 2 * DOT, 2 * DOT)) }
         graphics.fill(Ellipse2D.Double(14.5 - BALL, 4.5 - BALL, 2 * BALL, 2 * BALL))
         graphics.dispose()
         return image
     }
+}
 
-    private fun lightTaskbar(): Boolean = when (Platform.os) {
-        Os.MAC -> true
-        Os.LINUX -> false
-        Os.WINDOWS -> runCatching {
-            Advapi32Util.registryValueExists(WinReg.HKEY_CURRENT_USER, PERSONALIZE, "SystemUsesLightTheme") &&
-                Advapi32Util.registryGetIntValue(WinReg.HKEY_CURRENT_USER, PERSONALIZE, "SystemUsesLightTheme") == 1
-        }.getOrDefault(false)
-    }
+object SystemTheme {
+
+    val isLight: Boolean
+        get() = when (Platform.os) {
+            Os.MAC -> true
+            Os.LINUX -> false
+            Os.WINDOWS -> runCatching {
+                Advapi32Util.registryValueExists(WinReg.HKEY_CURRENT_USER, PERSONALIZE, "SystemUsesLightTheme") &&
+                    Advapi32Util.registryGetIntValue(WinReg.HKEY_CURRENT_USER, PERSONALIZE, "SystemUsesLightTheme") == 1
+            }.getOrDefault(false)
+        }
 
     private const val PERSONALIZE = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+}
+
+object MenuTheme {
+
+    fun apply() {
+        val light = SystemTheme.isLight
+        val text = if (light) "#1A1A1A" else "#FFFFFF"
+        FlatLaf.setGlobalExtraDefaults(
+            mapOf(
+                "@menuBackground" to if (light) "#F9F9F9" else "#2B2B2B",
+                "@menuSelectionBackground" to if (light) "#E5E5E5" else "#414141",
+                "@menuItemMargin" to "5,12,5,12",
+                "MenuItem.selectionForeground" to text,
+                "Menu.selectionForeground" to text,
+                "CheckBoxMenuItem.selectionForeground" to text,
+            ),
+        )
+        runCatching { if (light) FlatLightLaf.setup() else FlatDarkLaf.setup() }.onFailure { Log.write("could not set up the menu look: ${it.message}") }
+    }
 }

@@ -60,10 +60,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import javax.swing.JPopupMenu
 import javax.swing.SwingUtilities
 
-fun main() {
+fun main(args: Array<String>) {
     System.setProperty("apple.awt.UIElement", "true")
+    val sending = args.dropWhile { it != "--send" }.drop(1)
+    if (sending.isNotEmpty()) Inbox.post(paths = sending)
     if (!SingleInstance.acquire()) {
-        Log.write("Tossling is already running")
+        if (sending.isEmpty()) Log.write("Tossling is already running")
         exitProcess(0)
     }
     val store = SettingsStore()
@@ -81,6 +83,10 @@ fun main() {
         })
     }
     SwingUtilities.invokeAndWait(tray::install)
+    ExplorerMenu.apply()
+    Inbox.watch { files ->
+        if (store.settings.value.isConfigured) room.sendFiles(files) else tray.notify(L("Сначала войди в комнату", "Join a room first"))
+    }
     application {
         val settings by store.settings.collectAsState()
         val showOnboarding by onboarding.collectAsState()

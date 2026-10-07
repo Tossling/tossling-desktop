@@ -10,6 +10,11 @@ import java.awt.image.BufferedImage
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
+import java.nio.file.FileSystems
+import java.nio.file.StandardWatchEventKinds
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 object Autostart {
 
@@ -29,6 +34,59 @@ object Autostart {
             }
         }.onFailure { Log.write("could not change the start at login: ${it.message}") }
     }
+}
+
+object ExplorerMenu {
+
+    private const val KEY = "Software\\Classes\\*\\shell\\Tossling"
+
+    fun apply() {
+        val exe = Platform.executable
+        if (Platform.os != Os.WINDOWS || exe == null) return
+        runCatching {
+            Advapi32Util.registryCreateKey(WinReg.HKEY_CURRENT_USER, "$KEY\\command")
+            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, KEY, "", L("Отправить через Tossling", "Send via Tossling"))
+            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, KEY, "Icon", "\"$exe\",0")
+            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, "$KEY\\command", "", "\"$exe\" --send \"%1\"")
+        }.onFailure { Log.write("could not add Tossling to the Explorer menu: ${it.message}") }
+    }
+}
+
+object Inbox {
+
+    private val dir: File get() = File(Platform.home, "inbox").apply { mkdirs() }
+
+    fun post(paths: List<String>) {
+        val name = UUID.randomUUID().toString()
+        val draft = File(dir, "$name.tmp")
+        draft.writeText(paths.joinToString(separator = "\n"))
+        draft.renameTo(File(dir, "$name.send"))
+    }
+
+    fun watch(onFiles: (List<File>) -> Unit) {
+        thread(isDaemon = true, name = "tossling-inbox") {
+            val watcher = runCatching { FileSystems.getDefault().newWatchService().also { dir.toPath().register(it, StandardWatchEventKinds.ENTRY_CREATE) } }.getOrNull()
+            while (true) {
+                drain(onFiles)
+                val key = watcher?.poll(POLL_SECONDS, TimeUnit.SECONDS) ?: run {
+                    if (watcher == null) Thread.sleep(POLL_SECONDS * 1000)
+                    null
+                }
+                key?.pollEvents()
+                key?.reset()
+            }
+        }
+    }
+
+    private fun drain(onFiles: (List<File>) -> Unit) {
+        val requests = dir.listFiles { file -> file.name.endsWith(".send") }?.sortedBy { it.lastModified() }.orEmpty()
+        val files = requests.flatMap { request ->
+            runCatching { request.readLines() }.getOrDefault(emptyList()).also { request.delete() }
+        }.filter { it.isNotBlank() }.distinct().map(::File)
+        if (files.isNotEmpty()) runCatching { onFiles(files) }.onFailure { Log.write("could not send from the Explorer menu: ${it.message}") }
+    }
+
+    private const val POLL_SECONDS = 2L
 }
 
 object SingleInstance {

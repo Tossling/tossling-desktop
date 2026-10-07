@@ -19,6 +19,7 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(desktopLibs.kotlinx.coroutines.swing)
+    implementation(desktopLibs.flatlaf)
     implementation(desktopLibs.jna.platform)
     implementation(desktopLibs.zxing.core)
 
