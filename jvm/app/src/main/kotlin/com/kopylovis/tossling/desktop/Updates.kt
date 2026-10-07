@@ -98,7 +98,8 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
                 connection.disconnect()
             }
         }
-        if (!isGenuine(file = file, release = release)) {
+        verify(file = file, release = release)?.let { reason ->
+            Log.write("the installer of ${release.version} failed the check: $reason")
             file.delete()
             throw IllegalStateException(L("установщик не прошёл проверку подписи", "the installer failed the signature check"))
         }
@@ -121,7 +122,7 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
     }
 
     companion object {
-        const val FEED_URL = "https://monoroh.com/tossling/windows.json"
+        val FEED_URL: String = System.getenv("TOSSLING_UPDATE_FEED")?.takeIf { it.isNotBlank() } ?: "https://monoroh.com/tossling/windows.json"
         private const val PUBLIC_KEY = "ZS/cGMRgf1n4zmwdXpGqy96Yi1pHypgQJp+Ff30pu/A="
         private const val ED25519_PREFIX = "302a300506032b6570032100"
         private const val FIRST_CHECK_MS = 20_000L
@@ -130,8 +131,9 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
         private const val BUFFER = 1 shl 16
         private val TRUSTED_HOSTS = setOf("github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
 
-        fun isGenuine(file: File, release: Release, publicKey: String = PUBLIC_KEY): Boolean = runCatching {
-            if (file.length() != release.size) return false
+        fun isGenuine(file: File, release: Release, publicKey: String = PUBLIC_KEY): Boolean = verify(file = file, release = release, publicKey = publicKey) == null
+
+        fun verify(file: File, release: Release, publicKey: String = PUBLIC_KEY): String? = try {
             val prefix = ED25519_PREFIX.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             val key = KeyFactory.getInstance("Ed25519").generatePublic(X509EncodedKeySpec(prefix + Base64.getDecoder().decode(publicKey)))
             val verifier = Signature.getInstance("Ed25519").apply { initVerify(key) }
@@ -146,8 +148,15 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
                 }
             }
             val sha = digest.digest().joinToString(separator = "") { "%02x".format(it) }
-            sha.equals(release.sha256, ignoreCase = true) && verifier.verify(Base64.getDecoder().decode(release.signature))
-        }.getOrDefault(false)
+            when {
+                file.length() != release.size -> "${file.length()} bytes instead of ${release.size}"
+                !sha.equals(release.sha256, ignoreCase = true) -> "SHA-256 $sha instead of ${release.sha256}"
+                !verifier.verify(Base64.getDecoder().decode(release.signature)) -> "the signature does not match"
+                else -> null
+            }
+        } catch (error: Exception) {
+            error.toString()
+        }
 
         fun isNewer(candidate: String, current: String): Boolean {
             val a = parts(candidate) ?: return false
@@ -158,6 +167,7 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
         private fun parts(version: String): List<Int>? = version.trim().removePrefix("v").split('.').map { it.toIntOrNull() ?: return null }
 
         private fun fetch(url: String): ByteArray? {
+            if (url.startsWith("file:")) return File(URI(url)).takeIf { it.isFile }?.readBytes()
             val connection = open(url)
             try {
                 if (connection.responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null
