@@ -55,6 +55,10 @@ Applications and open it (or `brew install --cask tossling/tap/tossling`). The a
 start it asks for the server address and the token, or for an invite code from another Mac, then shows a QR code for
 the phone. It lives in the menu bar afterwards.
 
+Updates come by themselves since 0.3: once a day the app looks for a new version (Sparkle, the update is signed with
+Tossling's update key and with the same Developer ID) and offers it in the menu; «Check for Updates…» asks right away.
+Builds from source are not updated this way.
+
 The `tossling` command comes with the app: Homebrew puts it into its `bin`, otherwise the app links it as
 `~/.local/bin/tossling` (add `~/.local/bin` to `PATH` if your shell does not have it). The old name `tossy` keeps
 working as an alias.
@@ -176,8 +180,12 @@ source install; to go back to the source, run `tossling off`, delete the app, th
 make test     # Python and Swift checks (Xcode and the Command Line Tools), crypto vectors, CLI tests
 make build    # Tossling.app and Tossling Finder.app into build/ without installing
 make app      # the self-contained Tossling.app into build/release (universal, Finder extension inside)
-make release  # the same, signed with Developer ID, notarized, in a notarized disk image, plus a Homebrew cask
+make release  # the same, signed with Developer ID, notarized, in a notarized disk image, plus a Homebrew cask and the appcast
+make publish NOTES=notes.md  # tag, GitHub release, cask in tossling/homebrew-tap, appcast on monoroh.com/tossling
 ```
+
+`make app` downloads Sparkle (pinned version and checksum) into `build/cache`. A release needs the Sparkle key in the
+login keychain (`generate_keys --account tossling`); its public half is `SPARKLE_PUBLIC_KEY` in `scripts/build_app.py`.
 
 When `/Applications/Tossling.app` is installed, a source `tossling` hands every command to the app's own copy, so the two
 never fight over the helper; set `TOSSLING_FROM_SOURCE=1` to run the source copy anyway.

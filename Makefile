@@ -6,7 +6,7 @@ SWIFTC := swiftc -swift-version 5
 HELPER := mac/Tossling/*.swift
 FINDER := -parse-as-library -application-extension -module-name TosslingFinder mac/TosslingFinder/FinderSync.swift
 
-.PHONY: install uninstall check selftest test build app release clean
+.PHONY: install uninstall check selftest test build app release publish clean
 
 install:
 	@mkdir -p "$(BIN)"
@@ -42,6 +42,9 @@ app:
 
 release:
 	@$(PYTHON) scripts/build_app.py --release
+
+publish:
+	@$(PYTHON) scripts/publish.py --notes "$(NOTES)"
 
 clean:
 	@rm -rf build

@@ -6,6 +6,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
+from email.utils import formatdate
+from xml.sax.saxutils import escape
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "cli", "lib"))
@@ -17,6 +20,14 @@ AGENT_LABEL = BUNDLE_ID + ".agent"
 EXT_ID = BUNDLE_ID + ".finder.send"
 NOTARY_PROFILE = os.environ.get("TOSSLING_NOTARY_PROFILE", "tossy-notary")
 ARCHES = ("arm64", "x86_64")
+SPARKLE_VERSION = "2.10.0"
+SPARKLE_SHA256 = "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
+SPARKLE_DIR = os.path.join(ROOT, "build", "cache", f"sparkle-{SPARKLE_VERSION}")
+SPARKLE_ACCOUNT = "tossling"
+SPARKLE_PUBLIC_KEY = os.environ.get("TOSSLING_SPARKLE_PUBLIC_KEY", "")
+FEED_URL = "https://monoroh.com/tossling/appcast.xml"
+DOWNLOAD_URL = "https://github.com/tossling/tossling-desktop/releases/download/v{version}/{name}"
+NOTES_URL = "https://github.com/tossling/tossling-desktop/releases/tag/v{version}"
 CASK = """cask "tossling" do
   version "{version}"
   sha256 "{sha256}"
@@ -26,6 +37,7 @@ CASK = """cask "tossling" do
   desc "One end-to-end encrypted clipboard for your Macs and Android phone"
   homepage "https://github.com/tossling/tossling-desktop"
 
+  auto_updates true
   depends_on macos: :ventura
 
   app "Tossling.app"
@@ -76,6 +88,22 @@ def universal(sources, output, extra):
         run("lipo", "-create", *parts, "-output", output)
 
 
+def sparkle():
+    framework = os.path.join(SPARKLE_DIR, "Sparkle.framework")
+    if os.path.isdir(framework):
+        return SPARKLE_DIR
+    os.makedirs(SPARKLE_DIR, exist_ok=True)
+    archive = os.path.join(SPARKLE_DIR, "sparkle.tar.xz")
+    print(f"Downloading Sparkle {SPARKLE_VERSION}…")
+    urllib.request.urlretrieve(f"https://github.com/sparkle-project/Sparkle/releases/download/{SPARKLE_VERSION}/Sparkle-{SPARKLE_VERSION}.tar.xz", archive)
+    if hashlib.sha256(open(archive, "rb").read()).hexdigest() != SPARKLE_SHA256:
+        os.remove(archive)
+        sys.exit("The Sparkle download does not match its checksum.")
+    run("tar", "-xf", archive, "-C", SPARKLE_DIR, "Sparkle.framework", "bin", "LICENSE")
+    os.remove(archive)
+    return SPARKLE_DIR
+
+
 def icns(resources):
     png = os.path.join(ROOT, "mac", "Tossling", "icon.png")
     with tempfile.TemporaryDirectory() as tmp:
@@ -98,7 +126,16 @@ def build():
     sources = [os.path.join(helper_src, "main.swift")] + sorted(
         os.path.join(helper_src, f) for f in os.listdir(helper_src) if f.endswith(".swift") and f != "main.swift")
     print("Building Tossling (arm64 + x86_64)…")
-    universal(sources, os.path.join(contents, "MacOS", "Tossling"), [])
+    frameworks = sparkle()
+    universal(sources, os.path.join(contents, "MacOS", "Tossling"),
+              ["-F", frameworks, "-framework", "Sparkle", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
+    bundled = os.path.join(contents, "Frameworks", "Sparkle.framework")
+    shutil.copytree(os.path.join(frameworks, "Sparkle.framework"), bundled, symlinks=True)
+    for xpc in (os.path.join(bundled, "XPCServices"), os.path.join(bundled, "Versions", "B", "XPCServices")):
+        if os.path.islink(xpc):
+            os.unlink(xpc)
+        else:
+            shutil.rmtree(xpc, ignore_errors=True)
     appex = os.path.join(contents, "PlugIns", "TosslingFinder.appex")
     print("Building the Finder extension…")
     universal([os.path.join(ROOT, "mac", "TosslingFinder", "FinderSync.swift")], os.path.join(appex, "Contents", "MacOS", "TosslingFinder"),
@@ -115,6 +152,7 @@ def build():
         plistlib.dump({**common, "CFBundleIdentifier": BUNDLE_ID, "CFBundleName": "Tossling", "CFBundleDisplayName": "Tossling",
                        "CFBundleExecutable": "Tossling", "CFBundlePackageType": "APPL", "LSUIElement": True,
                        "TosslingServiceLabel": AGENT_LABEL, "TosslingDistribution": True,
+                       **({"SUFeedURL": FEED_URL, "SUPublicEDKey": SPARKLE_PUBLIC_KEY, "SUEnableAutomaticChecks": True} if SPARKLE_PUBLIC_KEY else {}),
                        "CFBundleURLTypes": [{"CFBundleURLName": BUNDLE_ID, "CFBundleURLSchemes": ["tossling"]}]}, f)
     with open(os.path.join(appex, "Contents", "Info.plist"), "wb") as f:
         plistlib.dump({**common, "CFBundleIdentifier": EXT_ID, "CFBundleName": "Tossling", "CFBundleDisplayName": "Tossling",
@@ -133,6 +171,7 @@ def build():
     shutil.copytree(os.path.join(ROOT, "bin"), os.path.join(cli, "bin"), symlinks=True)
     shutil.copy(os.path.join(ROOT, "VERSION"), cli)
     shutil.copy(os.path.join(ROOT, "LICENSE"), resources)
+    shutil.copy(os.path.join(frameworks, "LICENSE"), os.path.join(resources, "Sparkle-LICENSE"))
     return build_number
 
 
@@ -146,6 +185,9 @@ def sign(identity):
                            "com.apple.security.temporary-exception.files.home-relative-path.read-only": ["/" + os.path.relpath(DEVICES, HOME)]}, f)
         run("codesign", "--force", "--sign", identity, *hardened, "--entitlements", entitlements,
             os.path.join(APP, "Contents", "PlugIns", "TosslingFinder.appex"))
+    framework = os.path.join(APP, "Contents", "Frameworks", "Sparkle.framework")
+    for part in (os.path.join(framework, "Versions", "B", "Autoupdate"), os.path.join(framework, "Versions", "B", "Updater.app"), framework):
+        run("codesign", "--force", "--sign", identity, *hardened, part)
     run("codesign", "--force", "--sign", identity, *hardened, "--identifier", BUNDLE_ID, APP)
     run("codesign", "--verify", "--deep", "--strict", APP)
     return developer_id
@@ -180,6 +222,32 @@ def notarize(identity, name):
     return image
 
 
+def appcast(image, build_number):
+    signed = run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, image).strip()
+    name = os.path.basename(image)
+    item = f"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Tossling</title>
+    <link>https://monoroh.com/tossling</link>
+    <item>
+      <title>Tossling {escape(version())}</title>
+      <pubDate>{formatdate(usegmt=True)}</pubDate>
+      <sparkle:version>{build_number}</sparkle:version>
+      <sparkle:shortVersionString>{escape(version())}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>{NOTES_URL.format(version=version())}</sparkle:fullReleaseNotesLink>
+      <enclosure url="{DOWNLOAD_URL.format(version=version(), name=name)}" {signed} type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
+"""
+    path = os.path.join(OUT, "appcast.xml")
+    with open(path, "w") as f:
+        f.write(item)
+    return path
+
+
 def main():
     release = "--release" in sys.argv
     build_number = build()
@@ -190,11 +258,14 @@ def main():
     if release:
         if not developer_id:
             sys.exit("A Developer ID Application certificate is needed for a release; this build is for local testing only.")
+        if not SPARKLE_PUBLIC_KEY:
+            sys.exit("The Sparkle public key is missing: SPARKLE_PUBLIC_KEY in scripts/build_app.py.")
         archive = notarize(identity, name)
         digest = hashlib.sha256(open(archive, "rb").read()).hexdigest()
         with open(os.path.join(OUT, "tossling.rb"), "w") as f:
             f.write(CASK.format(version=version(), sha256=digest))
-        print(f"{archive}\nversion {version()} ({build_number}), sha256 {digest}\ncask: {os.path.join(OUT, 'tossling.rb')}")
+        feed = appcast(archive, build_number)
+        print(f"{archive}\nversion {version()} ({build_number}), sha256 {digest}\ncask: {os.path.join(OUT, 'tossling.rb')}\nappcast: {feed}")
     else:
         print(f"{APP}\nversion {version()} ({build_number}); {'ready to notarize' if developer_id else 'for local testing, not for distribution'}")
 

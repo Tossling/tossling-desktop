@@ -96,6 +96,13 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         menu.addItem(ActionItem(L("Журнал", "Log"), symbol: "list.bullet.rectangle") {
             NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Tossling.log"))
         })
+        if Updates.shared.available {
+            if let version = Updates.shared.waiting {
+                menu.addItem(ActionItem(L("Установить версию \(version)…", "Install Version \(version)…"), symbol: "arrow.down.circle") { Updates.shared.check() })
+            } else {
+                menu.addItem(ActionItem(L("Проверить обновления…", "Check for Updates…"), symbol: "arrow.triangle.2.circlepath") { Updates.shared.check() })
+            }
+        }
         menu.addItem(.separator())
         menu.addItem(ActionItem(L("Выключить Tossling на этом Mac…", "Turn Off Tossling on This Mac…")) { [weak self] in self?.turnOff() })
     }
