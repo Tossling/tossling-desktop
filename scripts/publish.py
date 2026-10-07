@@ -42,6 +42,24 @@ def put(repo, path, source, message):
         os.remove(f.name)
 
 
+def artifact(run_id, name, directory):
+    found = run("gh", "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts", "--jq", f'.artifacts[] | select(.name == "{name}") | .id').strip()
+    if not found:
+        sys.exit(f"The build {run_id} has no {name}.")
+    path = os.path.join(directory, name)
+    with open(path, "wb") as f:
+        if subprocess.run(["gh", "api", f"repos/{REPO}/actions/artifacts/{found}/zip"], stdout=f).returncode != 0:
+            sys.exit(f"Could not download {name}.")
+    return path
+
+
+def linux(v, tag, run_id):
+    with tempfile.TemporaryDirectory() as tmp:
+        files = [artifact(run_id, name, tmp) for name in (f"tossling_{v}_amd64.deb", f"Tossling-{v}-linux-x64.tar.gz")]
+        run("gh", "release", "upload", tag, *files, "-R", REPO, "--clobber")
+    print("The Linux .deb and tar.gz added to", tag)
+
+
 def windows(v, tag):
     print("Waiting for the Windows installer from CI…")
     run_id = None
@@ -56,14 +74,8 @@ def windows(v, tag):
     if subprocess.run(["gh", "run", "watch", str(run_id), "-R", REPO, "--exit-status", "--interval", "30"], capture_output=True).returncode != 0:
         sys.exit(f"The Windows build {run_id} failed: fix it, rerun it, then scripts/publish.py --windows-only.")
     name = f"Tossling-{v}.msi"
-    artifact = run("gh", "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts", "--jq", f'.artifacts[] | select(.name == "{name}") | .id').strip()
-    if not artifact:
-        sys.exit(f"The Windows build {run_id} has no {name}.")
     with tempfile.TemporaryDirectory() as tmp:
-        msi = os.path.join(tmp, name)
-        with open(msi, "wb") as f:
-            if subprocess.run(["gh", "api", f"repos/{REPO}/actions/artifacts/{artifact}/zip"], stdout=f).returncode != 0:
-                sys.exit(f"Could not download {name}.")
+        msi = artifact(run_id, name, tmp)
         signed = run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, msi)
         match = re.search(r'edSignature="([^"]+)"', signed)
         if not match:
@@ -91,6 +103,7 @@ def windows(v, tag):
             }, f, indent=2)
         put(*WINDOWS_FEED, feed, f"Tossling {v} for Windows")
     print("Windows feed updated: Tossling on Windows will offer the update once the site is rebuilt")
+    linux(v, tag, run_id)
 
 
 def main():

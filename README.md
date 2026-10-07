@@ -202,7 +202,7 @@ tests against; `make selftest` checks the Mac code with it. CLI tests run on a t
   <img src="docs/images/windows-menu.png" width="440" alt="The Tossling tray menu on Windows: recent items, devices online and the room actions">
 </p>
 
-`jvm/` is the app for Windows (and Linux later): Kotlin with Compose Desktop, sitting in the tray. It joins a room with
+`jvm/` is the app for Windows and Linux: Kotlin with Compose Desktop, sitting in the tray. It joins a room with
 an invite from another computer (Devices → Invite a Computer, or `tossling invite` on a Mac), or creates a room on your
 server and shows the QR code for the phone. Text, images, files and folders (as a zip) go both ways; passwords marked by
 password managers are skipped. Win+Shift+C copies the selection and sends it, and Explorer gets «Send via Tossling»
@@ -217,6 +217,16 @@ the app, the autostart and the Explorer entry; the room and history stay in `%AP
 user, no administrator rights needed. Until the installers are signed (see [Code signing policy](#code-signing-policy)),
 Windows asks to confirm the first start (More info → Run anyway). Every push builds the MSI in the «Windows and Linux»
 workflow; `make publish` adds it to the release and updates the Windows feed.
+
+On Linux (x86-64) `tossling_<version>_amd64.deb` installs into `/opt/tossling` with an entry in the applications menu
+(Ubuntu 20.04 or newer, Debian, Mint, Pop!_OS: `sudo apt install ./tossling_<version>_amd64.deb`), and
+`Tossling-<version>-linux-x64.tar.gz` runs without installing (`Tossling/bin/Tossling`). The icon goes to the panel as a
+StatusNotifierItem with a native menu: KDE, Xfce and Cinnamon show it as is, GNOME needs the AppIndicator extension,
+which Ubuntu has built in. Tossling adds «Send via Tossling» to Nautilus (Scripts), Nemo and Dolphin, starts at login
+through `~/.config/autostart/tossling.desktop`, and on X11 Super+Shift+C (Ctrl+Alt+Shift+C when it is taken) sends the
+selected text. Wayland has no global shortcuts for apps: bind `/opt/tossling/bin/Tossling --send-clipboard` to a key in
+the system settings. Wayland sessions are not tested yet. There are no automatic updates on Linux yet: install the new
+`.deb` from Releases over the old one.
 
 The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
 
