@@ -198,6 +198,10 @@ tests against; `make selftest` checks the Mac code with it. CLI tests run on a t
 
 ### Windows and Linux
 
+<p align="center">
+  <img src="docs/images/windows-menu.png" width="440" alt="The Tossling tray menu on Windows: recent items, devices online and the room actions">
+</p>
+
 `jvm/` is the app for Windows (and Linux later): Kotlin with Compose Desktop, sitting in the tray. It joins a room with
 an invite from another computer (Devices → Invite a Computer, or `tossling invite` on a Mac), or creates a room on your
 server and shows the QR code for the phone. Text, images, files and folders (as a zip) go both ways; passwords marked by
