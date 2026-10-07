@@ -28,7 +28,21 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew :protocol:test :app:test --console=plain
+      - run: ./gradlew :protocol:test :app:test :app:packageDeb :app:createDistributable --console=plain
+      - run: |
+          mkdir -p app/build/release
+          cp app/build/compose/binaries/main/deb/*.deb "app/build/release/tossling_$(cat ../VERSION)_amd64.deb"
+          tar -C app/build/compose/binaries/main/app -czf "app/build/release/Tossling-$(cat ../VERSION)-linux-x64.tar.gz" Tossling
+      - uses: actions/upload-artifact@v7
+        with:
+          path: jvm/app/build/release/tossling_*.deb
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          path: jvm/app/build/release/Tossling-*-linux-x64.tar.gz
+          archive: false
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
