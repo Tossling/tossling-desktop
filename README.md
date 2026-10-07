@@ -12,7 +12,8 @@
 <p align="center">
   <a href="https://github.com/tossling/tossling-desktop/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/tossling/tossling-desktop?color=3067B8"></a>
   <img alt="macOS 13 or newer" src="https://img.shields.io/badge/macOS-13%2B-3067B8">
-  <img alt="Windows and Linux in progress" src="https://img.shields.io/badge/Windows%20%C2%B7%20Linux-in%20progress-8A8F98">
+  <img alt="Windows 10 or newer" src="https://img.shields.io/badge/Windows-10%2B-3067B8">
+  <img alt="Linux in progress" src="https://img.shields.io/badge/Linux-in%20progress-8A8F98">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-3067B8"></a>
 </p>
 
@@ -22,11 +23,11 @@
   <img src="docs/images/android-home.png" width="196" alt="Tossling on Android: the room and the recent items">
 </p>
 
-Copy on one Mac and paste on another Mac or on the phone; files up to 500 MB go the same way. The server only
+Copy on one computer and paste on another or on the phone; files up to 500 MB go the same way. The server only
 relays ciphertext.
 
-This repository is the desktop side. Today that is macOS: a menu bar helper (`Tossling.app`), the `tossling` command
-and a Finder extension. **Windows and Linux are in progress** and will live here too.
+This repository is the desktop side: for macOS a menu bar helper (`Tossling.app`), the `tossling` command and a
+Finder extension, for Windows a tray app ([Windows](#windows-and-linux)). **Linux is in progress** and will live here too.
 The phone app lives in [tossling/tossling-mobile](https://github.com/tossling/tossling-mobile), the server in
 [tossling/tossling-server](https://github.com/tossling/tossling-server).
 
