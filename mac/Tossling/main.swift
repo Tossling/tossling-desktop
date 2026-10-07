@@ -1739,6 +1739,8 @@ term.resume()
 
 retireTokens()
 Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in retireTokens() }
+followServerMove()
+Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in followServerMove() }
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)

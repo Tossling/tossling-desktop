@@ -2,13 +2,41 @@ import AppKit
 import CryptoKit
 
 func channelPrefix(_ server: String) -> String {
-    guard let url = URL(string: trimmedServer(server) + "/v1/tossling/health") else { return "tossy-" }
+    healthOf(server) == nil ? "tossy-" : "tossling-"
+}
+
+func healthOf(_ server: String) -> [String: Any]? {
+    guard let url = URL(string: trimmedServer(server) + "/v1/tossling/health") else { return nil }
     var request = URLRequest(url: url)
     request.timeoutInterval = 10
     let (code, data) = runSync(request)
     guard code == 200, let health = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-          health["server"] as? String == "tossling-server" else { return "tossy-" }
-    return "tossling-"
+          health["server"] as? String == "tossling-server" else { return nil }
+    return health
+}
+
+func followServerMove() {
+    let current = trimmedServer(conf.server)
+    let token = conf.token
+    DispatchQueue.global(qos: .utility).async {
+        guard let main = healthOf(current)?["url"] as? String, !main.isEmpty else { return }
+        let target = trimmedServer(normalizedServer(main))
+        guard target.lowercased() != current.lowercased(), let next = URL(string: target), let now = URL(string: current),
+              next.scheme == "https" || next.scheme == now.scheme, healthOf(target) != nil,
+              let account = URL(string: target + "/v1/account") else { return }
+        var request = URLRequest(url: account)
+        request.timeoutInterval = 10
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        guard runSync(request).0 == 200 else {
+            log(L("сервер теперь \(target), но он не принял токен: остаюсь на \(current)", "the server is now \(target), but it did not accept the token: staying on \(current)"))
+            return
+        }
+        DispatchQueue.main.async {
+            guard trimmedServer(conf.server) == current, rewriteConfig({ $0["server"] = target }) else { return }
+            log(L("сервер переехал: \(current) → \(target)", "the server moved: \(current) → \(target)"))
+            restartAgent()
+        }
+    }
 }
 
 func isRoomTopic(_ topic: String) -> Bool {
