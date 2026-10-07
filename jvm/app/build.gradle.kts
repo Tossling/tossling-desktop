@@ -1,5 +1,4 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -67,18 +66,37 @@ val windowsInstaller = tasks.register("windowsInstallerResources") {
     }
 }
 
-tasks.withType<AbstractJPackageTask>().configureEach {
-    if (name == "packageMsi") {
-        dependsOn(windowsInstaller)
-        freeArgs.addAll("--resource-dir", layout.buildDirectory.dir("wix").get().asFile.absolutePath)
+if (System.getProperty("os.name").startsWith("Windows")) {
+    tasks.register<Exec>("windowsRelease") {
+        dependsOn("createDistributable", windowsInstaller, rootProject.tasks.named("unzipWix"))
+        val image = layout.buildDirectory.dir("compose/binaries/main/app/Tossling").get().asFile
+        val resources = layout.buildDirectory.dir("wix").get().asFile
+        val output = layout.buildDirectory.dir("release").get().asFile
+        val wix = rootProject.layout.buildDirectory.dir("wix311").get().asFile
+        val jpackage = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }.get().metadata.installationPath.file("bin/jpackage.exe").asFile
+        val version = appVersion
+        val packaged = packagedVersion
+        executable = jpackage.absolutePath
+        args(
+            "--type", "msi",
+            "--app-image", image.absolutePath,
+            "--name", "Tossling",
+            "--app-version", packaged,
+            "--vendor", "Tossling",
+            "--description", "One clipboard for your computers and phone",
+            "--resource-dir", resources.absolutePath,
+            "--dest", output.absolutePath,
+            "--win-per-user-install",
+            "--win-menu",
+            "--win-menu-group", "Tossling",
+            "--win-shortcut",
+            "--win-upgrade-uuid", "6f1d0c62-3d4b-4f6e-9a57-2a3f6b1c9e40",
+        )
+        environment("PATH", wix.absolutePath + File.pathSeparator + System.getenv("PATH"))
+        doFirst { output.deleteRecursively() }
+        doLast {
+            val built = output.listFiles { file -> file.extension == "msi" }.orEmpty().single()
+            built.renameTo(output.resolve("Tossling-$version.msi"))
+        }
     }
-}
-
-tasks.register<Copy>("windowsRelease") {
-    dependsOn("packageMsi")
-    from(layout.buildDirectory.dir("compose/binaries/main/msi"))
-    include("*.msi")
-    into(layout.buildDirectory.dir("release"))
-    val fileName = "Tossling-$appVersion.msi"
-    rename { fileName }
 }
