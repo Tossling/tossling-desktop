@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -50,4 +51,33 @@ compose.desktop {
             }
         }
     }
+}
+
+val windowsInstaller = tasks.register("windowsInstallerResources") {
+    val template = layout.projectDirectory.file("wix/main.wxs")
+    val target = layout.buildDirectory.dir("wix")
+    val version = appVersion
+    inputs.file(template)
+    inputs.property("version", version)
+    outputs.dir(target)
+    doLast {
+        val dir = target.get().asFile.apply { mkdirs() }
+        template.asFile.copyTo(dir.resolve("main.wxs"), overwrite = true)
+        dir.resolve("overrides.wxi").writeText("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Include>\n  <?define TosslingVersion = \"$version\" ?>\n</Include>\n")
+    }
+}
+
+tasks.withType<AbstractJPackageTask>().configureEach {
+    if (name == "packageMsi") {
+        dependsOn(windowsInstaller)
+        freeArgs.addAll("--resource-dir", layout.buildDirectory.dir("wix").get().asFile.absolutePath)
+    }
+}
+
+tasks.register<Copy>("windowsRelease") {
+    dependsOn("packageMsi")
+    from(layout.buildDirectory.dir("compose/binaries/main/msi"))
+    include("*.msi")
+    into(layout.buildDirectory.dir("release"))
+    rename { "Tossling-$appVersion.msi" }
 }

@@ -38,16 +38,18 @@ object Autostart {
 
 object ExplorerMenu {
 
-    private const val KEY = "Software\\Classes\\*\\shell\\Tossling"
+    private val KEYS = listOf("Software\\Classes\\*\\shell\\Tossling", "Software\\Classes\\Directory\\shell\\Tossling")
 
     fun apply() {
         val exe = Platform.executable
         if (Platform.os != Os.WINDOWS || exe == null) return
         runCatching {
-            Advapi32Util.registryCreateKey(WinReg.HKEY_CURRENT_USER, "$KEY\\command")
-            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, KEY, "", L("Отправить через Tossling", "Send via Tossling"))
-            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, KEY, "Icon", "\"$exe\",0")
-            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, "$KEY\\command", "", "\"$exe\" --send \"%1\"")
+            KEYS.forEach { key ->
+                Advapi32Util.registryCreateKey(WinReg.HKEY_CURRENT_USER, "$key\\command")
+                Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, key, "", L("Отправить через Tossling", "Send via Tossling"))
+                Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, key, "Icon", "\"$exe\",0")
+                Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, "$key\\command", "", "\"$exe\" --send \"%1\"")
+            }
         }.onFailure { Log.write("could not add Tossling to the Explorer menu: ${it.message}") }
     }
 }

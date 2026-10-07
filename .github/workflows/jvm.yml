@@ -3,6 +3,7 @@ name: Windows and Linux
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths: ["jvm/**", ".github/workflows/jvm.yml", "VERSION"]
   pull_request:
     paths: ["jvm/**", ".github/workflows/jvm.yml", "VERSION"]
@@ -44,9 +45,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew :app:test :app:packageMsi --console=plain
-      - uses: actions/upload-artifact@v4
+      - run: ./gradlew :app:test :app:windowsRelease --console=plain
+      - uses: actions/upload-artifact@v7
         with:
-          name: tossling-windows-${{ github.run_number }}
-          path: jvm/app/build/compose/binaries/main/msi/*.msi
+          path: jvm/app/build/release/Tossling-*.msi
+          archive: false
           if-no-files-found: error

@@ -1209,6 +1209,10 @@ func notify(_ body: String, file: URL? = nil, link: URL? = nil, title: String = 
     try? p.run()
 }
 
+func isComputer(_ source: Any?) -> Bool {
+    ["mac", "windows", "linux"].contains(source as? String ?? "")
+}
+
 @discardableResult
 func remember(_ meta: [String: Any]) -> Bool {
     let name = meta["n"] as? String ?? "?"
@@ -1219,7 +1223,7 @@ func remember(_ meta: [String: Any]) -> Bool {
     let offered = (meta["pk"] as? String).flatMap { Data(base64Encoded: $0)?.count == 32 ? $0 : nil } ?? ""
     let renewed = meta["re"] as? Bool == true && meta["k"] as? String == "hello" && !offered.isEmpty
     members[id] = ["name": name, "src": source, "seen": Date().timeIntervalSince1970, "pk": known.isEmpty || renewed ? offered : known]
-    if source != "mac" {
+    if !isComputer(source) {
         if conf.listenTopics.first == conf.room && meta["id"] != nil { moved = true }
         phone = name
         if isNew || meta["k"] as? String == "hello" { phoneAt = Date().timeIntervalSince1970 }
@@ -1382,7 +1386,7 @@ func apply(_ meta: [String: Any], _ data: Data?, fresh: Bool = true) {
         if isNew {
             log(L("новое устройство: \(from)", "a new device: \(from)"))
             notify(L("Подключён \(from)", "\(from) is connected"))
-            StatusMenu.shared.deviceJoined(from, isMac: meta["src"] as? String == "mac")
+            StatusMenu.shared.deviceJoined(from, isComputer: isComputer(meta["src"]))
         } else {
             log(L("на связи: \(from)", "online: \(from)"))
         }

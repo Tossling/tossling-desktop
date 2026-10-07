@@ -1,10 +1,15 @@
 package com.kopylovis.tossling.desktop
 
+import com.kopylovis.tossling.protocol.Invites
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -54,6 +59,15 @@ class RoomIntegrationTest {
             laptop.room.roomState.value.members.containsKey("d2d2d2d2d2d2d2d2") && desktop.room.roomState.value.members.containsKey(joined.deviceId)
         }
 
+        val code = Invites.newCode()
+        val invited = async(Dispatchers.IO) { laptop.room.invite(code = code) }
+        delay(1_500)
+        val guest = SettingsStore(file = File(root, "guest.json"))
+        assertTrue(Setup(store = guest).join(input = "${joined.server}/$code").isNotEmpty())
+        assertEquals(joined.room, guest.settings.value.room)
+        assertTrue(withTimeout(TIMEOUT_MS) { invited.await() }.orEmpty().isNotEmpty())
+        log("a computer joined through an invite from this one")
+
         desktop.clipboard.copy(Clip.Text("short text from the desktop"))
         waitFor("short text arrives") { (laptop.clipboard.current as? Clip.Text)?.text == "short text from the desktop" }
 
@@ -78,6 +92,13 @@ class RoomIntegrationTest {
         assertArrayEquals(payload.readBytes(), File(desktop.downloads, "payload.bin").readBytes())
         waitFor("the file is on the clipboard") { (desktop.clipboard.current as? Clip.Files)?.files?.single()?.name == "payload.bin" }
 
+        val folder = File(root, "Album").apply { mkdirs() }
+        File(folder, "one.txt").writeText("one")
+        File(folder, "inner").mkdirs()
+        File(folder, "inner/two.txt").writeText("two")
+        laptop.room.sendFiles(listOf(folder))
+        waitFor("the folder arrives as a zip") { File(desktop.downloads, "Album.zip").length() > 0 && (desktop.clipboard.current as? Clip.Files)?.files?.single()?.name == "Album.zip" }
+
         if (macHelper.isNotEmpty()) {
             val text = File(root, "mac.txt").apply { writeText("hello from the Mac helper") }
             val process = ProcessBuilder(macHelper, "--config", macConfig, "--text", text.absolutePath).redirectErrorStream(true).start()
@@ -85,6 +106,17 @@ class RoomIntegrationTest {
             assertEquals(output, 0, process.waitFor())
             waitFor("the Mac's text arrives") { (laptop.clipboard.current as? Clip.Text)?.text == "hello from the Mac helper" }
             log("Mac → JVM ok")
+
+            val macCode = Invites.newCode()
+            val macInvited = async(Dispatchers.IO) { laptop.room.invite(code = macCode) }
+            delay(1_500)
+            val out = File(root, "mac-join.json")
+            val join = ProcessBuilder(macHelper, "--join", joined.server, macCode, "--out", out.absolutePath).redirectErrorStream(true).start()
+            val joinOutput = join.inputStream.bufferedReader().readText()
+            assertEquals(joinOutput, 0, join.waitFor())
+            assertEquals(joined.room, Json.parseToJsonElement(out.readText()).jsonObject["r"]?.jsonPrimitive?.content)
+            assertTrue(withTimeout(TIMEOUT_MS) { macInvited.await() }.orEmpty().isNotEmpty())
+            log("the Mac joined through an invite from this computer")
         }
 
         val oldRoom = laptop.store.settings.value.room

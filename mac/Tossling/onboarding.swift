@@ -229,7 +229,7 @@ struct OnboardingView: View {
                 .font(.largeTitle.weight(.bold))
             switch model.step {
             case .choose:
-                Text(L("Общий буфер обмена твоих Mac и телефона через твой сервер.", "One clipboard for your Macs and phone, through your own server."))
+                Text(L("Общий буфер обмена твоих компьютеров и телефона через твой сервер.", "One clipboard for your computers and phone, through your own server."))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                 Button(L("Подключить свой сервер", "Connect my server")) { model.step = .server }
@@ -273,7 +273,7 @@ struct OnboardingView: View {
                 ProgressView()
                 Text(model.status).foregroundStyle(.secondary)
             case .pair:
-                Text(L("Открой Tossling на телефоне → «Подключить к Mac» и наведи камеру на код.", "Open Tossling on the phone → «Pair with a Mac» and point the camera at the code."))
+                Text(L("Открой Tossling на телефоне → «Подключить компьютер» и наведи камеру на код.", "Open Tossling on the phone → «Pair with a computer» and point the camera at the code."))
                     .multilineTextAlignment(.center)
                 if let qr = model.qr {
                     Image(nsImage: qr)

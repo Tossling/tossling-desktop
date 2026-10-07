@@ -62,8 +62,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         button.toolTip = "Tossling — \(statusLine())"
     }
 
-    func deviceJoined(_ name: String, isMac: Bool) {
-        guard panel != nil, waitsForPhone, !isMac else { return }
+    func deviceJoined(_ name: String, isComputer: Bool) {
+        guard panel != nil, waitsForPhone, !isComputer else { return }
         waitsForPhone = false
         showDone(L("\(name) подключён", "\(name) is connected"))
     }
@@ -231,9 +231,9 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             let alias = conf.aliases[id].flatMap { $0.isEmpty || $0 == own ? nil : $0 }
             let name = alias ?? own
             let seen = value["seen"] as? Double ?? 0
-            let isMac = value["src"] as? String == "mac"
+            let computer = isComputer(value["src"])
             let state = now - seen < StatusMenu.onlineWindow ? L("на связи", "online") : L("был \(ago(seen))", "seen \(ago(seen))")
-            let item = submenu(name, symbol: isMac ? "laptopcomputer" : "iphone", deviceMenu(id: id, name: name, own: own, hasAlias: alias != nil))
+            let item = submenu(name, symbol: computer ? "laptopcomputer" : "iphone", deviceMenu(id: id, name: name, own: own, hasAlias: alias != nil))
             let role = id == conf.owner ? L(" · создатель комнаты", " · created the room") : ""
             let ownNote = alias == nil ? "" : "\(own) · "
             item.attributedTitle = styled(name, ownNote + (memberKey(value) == nil ? L("\(state) · старая версия", "\(state) · old version") : state) + role)
@@ -529,7 +529,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             return
         }
         _ = showPanel(title: L("Подключить телефон", "Pair a Phone"), image: image,
-                      note: L("В Tossling на телефоне: «Добавить Mac» → наведи камеру на код. В коде ключ комнаты и токен, не показывай его посторонним.", "In Tossling on the phone: «Pair with a Mac» → point the camera at the code. The code holds the room key and the token, do not show it to others."),
+                      note: L("В Tossling на телефоне: «Добавить компьютер» → наведи камеру на код. В коде ключ комнаты и токен, не показывай его посторонним.", "In Tossling on the phone: «Add a computer» → point the camera at the code. The code holds the room key and the token, do not show it to others."),
                       status: L("Жду телефон…", "Waiting for the phone…"))
         waitsForPhone = true
     }

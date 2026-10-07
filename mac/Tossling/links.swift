@@ -35,7 +35,7 @@ var finderDevicesJSON = Data()
 func shareDevicesWithFinder() {
     let list: [[String: Any]] = members.filter { $0.key != conf.deviceID }
         .sorted { ($0.value["seen"] as? Double ?? 0) > ($1.value["seen"] as? Double ?? 0) }
-        .map { id, value in ["id": id, "name": conf.aliases[id] ?? value["name"] as? String ?? id, "mac": value["src"] as? String == "mac"] }
+        .map { id, value in ["id": id, "name": conf.aliases[id] ?? value["name"] as? String ?? id, "mac": isComputer(value["src"])] }
     guard let data = try? JSONSerialization.data(withJSONObject: list), data != finderDevicesJSON else { return }
     finderDevicesJSON = data
     try? data.write(to: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/tossling/devices.json"), options: .atomic)

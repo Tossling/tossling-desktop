@@ -2,6 +2,8 @@ package com.kopylovis.tossling.desktop
 
 import com.kopylovis.tossling.protocol.ClipMeta
 import com.kopylovis.tossling.protocol.Endpoint
+import com.kopylovis.tossling.protocol.Invite
+import com.kopylovis.tossling.protocol.Invites
 import com.kopylovis.tossling.protocol.Member
 import com.kopylovis.tossling.protocol.OLD_ROOM_PREFIX
 import com.kopylovis.tossling.protocol.ROOM_PREFIX
@@ -16,6 +18,7 @@ import com.kopylovis.tossling.protocol.network.NtfyEvent
 import com.kopylovis.tossling.protocol.network.NtfyException
 import com.kopylovis.tossling.protocol.serverMoveTarget
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,13 +36,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.serializer
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 fun interface Notifier {
     fun notify(text: String)
@@ -68,6 +76,8 @@ class Room(
     @Volatile private var lastReceived: Pair<String, Long>? = null
 
     @Volatile private var lastSent = ""
+
+    @Volatile private var invitation: Pair<String, CompletableDeferred<String>>? = null
 
     val roomState: StateFlow<RoomState> = state.value
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -163,6 +173,37 @@ class Room(
         }
         val body = fields.joinToString(separator = ",") { (name, value) -> "\"$name\":${SyncJson.encodeToString(String.serializer(), value)}" }
         return "{$body,\"v\":2}"
+    }
+
+    suspend fun invite(code: String): String? {
+        val conf = settings
+        val topic = Invites.topic(code = code, prefix = roomPrefix(server = conf.server))
+        val key = withContext(Dispatchers.Default) { Invites.key(code = code) }
+        val offer = Invites.seal(
+            invite = Invite(server = conf.server, token = conf.token, room = conf.room, key = conf.key, name = conf.deviceName, expires = now() / 1000.0 + Invites.LIFETIME_SECONDS, owner = conf.owner.ifEmpty { null }),
+            key = key,
+        )
+        val joined = CompletableDeferred<String>()
+        invitation = topic to joined
+        try {
+            client.publish(endpoint = conf.endpoint, topic = topic, message = offer, body = null, headers = NO_CACHE)
+            Log.write("invited a computer: waiting for it to join")
+            return withTimeoutOrNull(Invites.LIFETIME_SECONDS * 1000L) {
+                val repeat = launch {
+                    while (isActive) {
+                        delay(Invites.OFFER_INTERVAL_MS)
+                        runCatching { client.publish(endpoint = conf.endpoint, topic = topic, message = offer, body = null, headers = NO_CACHE) }
+                    }
+                }
+                try {
+                    joined.await()
+                } finally {
+                    repeat.cancel()
+                }
+            }
+        } finally {
+            invitation = null
+        }
     }
 
     suspend fun revoke(id: String) {
@@ -276,6 +317,7 @@ class Room(
         }
         val isNew = remember(meta = meta, time = event.time)
         if (kind == ClipMeta.HELLO) {
+            meta.invite?.let { topic -> invitation?.takeIf { it.first == topic }?.second?.complete(from) }
             if (isNew) {
                 Log.write("a new device: $from")
                 notifier.notify(L("Подключён $from", "$from is connected"))
@@ -490,8 +532,9 @@ class Room(
     private suspend fun sendFile(file: File) {
         val name = file.name
         Log.write("→ room: sending ${file.path}")
+        if (file.isDirectory) return sendFolder(folder = file)
         if (!file.isFile) {
-            notifier.notify(L("Папки пока не отправляю: «$name»", "Folders do not go yet: «$name»"))
+            notifier.notify(L("Не нашёл «$name»", "Could not find «$name»"))
             return
         }
         val size = file.length()
@@ -518,6 +561,24 @@ class Room(
         history.addFile(file = file, size = size, incoming = false, device = "")
         Log.write("→ room: the file $name (${sizeText(size)})")
         notifier.notify(L("Отправил «$name»", "Sent «$name»"))
+    }
+
+    private suspend fun sendFolder(folder: File) {
+        val name = folder.name.ifEmpty { "folder" }
+        notifier.notify(L("Упаковываю папку «$name»…", "Packing the folder «$name»…"))
+        val dir = Files.createTempDirectory(Platform.cache.apply { mkdirs() }.toPath(), "zip").toFile()
+        try {
+            val zip = File(dir, "$name.zip")
+            val packed = runCatching { withContext(Dispatchers.IO) { zipFolder(folder = folder, zip = zip) } }
+            if (packed.isFailure) {
+                Log.write("could not pack the folder $name: ${packed.exceptionOrNull()?.message}")
+                notifier.notify(L("Не упаковал папку «$name»", "Could not pack the folder «$name»"))
+                return
+            }
+            sendFile(file = zip)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     private suspend fun publishControl(kind: String, to: List<String>? = null) = publish(meta = control(kind = kind).copy(to = to), body = null)
@@ -622,6 +683,7 @@ class Room(
         private const val MAINTENANCE_MS = 3_600_000L
         private const val MOVE_EVERY_ROUNDS = 6
         private const val DAY_SECONDS = 86_400
+        private val NO_CACHE = mapOf("X-Cache" to "no")
         private val RETRY_MS = longArrayOf(3_000, 10_000, 30_000, 60_000, 120_000, 300_000)
     }
 }
@@ -643,4 +705,24 @@ fun uniqueFile(dir: File, name: String): File {
     var n = 2
     while (file.exists()) file = File(dir, "$base $n$extension").also { n++ }
     return file
+}
+
+fun zipFolder(folder: File, zip: File) {
+    val root = folder.toPath()
+    val parent = root.parent ?: root
+    ZipOutputStream(zip.outputStream().buffered()).use { output ->
+        Files.walk(root).use { paths ->
+            paths.forEach { path ->
+                val entry = parent.relativize(path).joinToString(separator = "/")
+                when {
+                    Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) -> output.putNextEntry(ZipEntry("$entry/")).also { output.closeEntry() }
+                    Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) -> {
+                        output.putNextEntry(ZipEntry(entry))
+                        Files.copy(path, output)
+                        output.closeEntry()
+                    }
+                }
+            }
+        }
+    }
 }

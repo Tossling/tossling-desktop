@@ -14,11 +14,12 @@ import com.kopylovis.tossling.protocol.network.NtfyException
 import com.kopylovis.tossling.protocol.normalizedServer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
 import java.security.SecureRandom
 import java.util.Base64
 
@@ -62,28 +63,20 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
         val topics = if (client.tosslingHealth(endpoint = Endpoint(server = server))?.isTossling == true) Invites.topics(code = code) else listOf(Invites.topic(code = code, prefix = OLD_ROOM_PREFIX))
         val key = withContext(Dispatchers.Default) { Invites.key(code = code) }
         val found = CompletableDeferred<Pair<Invite, String>>()
-        val result = withTimeoutOrNull(WAIT_MS) {
-            coroutineScope {
-                val listener = launch {
-                    try {
-                        client.stream(endpoint = Endpoint(server = server), topics = topics, onOpen = {}, onEvent = { event ->
-                            if (event.event == "message") Invites.open(message = event.message.orEmpty(), key = key)?.let { found.complete(it to event.topic) }
-                        })
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        found.completeExceptionally(error)
-                    }
-                }
-                try {
-                    found.await()
-                } finally {
-                    listener.cancel()
-                }
+        val listener = CoroutineScope(Dispatchers.IO).launch {
+            try {
+                client.stream(endpoint = Endpoint(server = server), topics = topics, onOpen = {}, onEvent = { event ->
+                    if (event.event == "message") Invites.open(message = event.message.orEmpty(), key = key)?.let { found.complete(it to event.topic) }
+                })
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                found.completeExceptionally(error)
             }
         }
         val (invite, topic) = try {
-            result ?: throw SetupException(L("Приглашение не пришло: на первом Mac должна идти tossling invite с этим кодом", "The invite did not come: the first Mac must be running tossling invite with this code"))
+            withTimeoutOrNull(WAIT_MS) { found.await() }
+                ?: throw SetupException(L("Приглашение не пришло: на первом компьютере должно быть открыто приглашение с этим кодом", "The invite did not come: the first computer must be showing an invite with this code"))
         } catch (error: NtfyException) {
             throw SetupException(
                 if (error.code == 401 || error.code == 403) {
@@ -92,6 +85,10 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
                     L("Сервер ответил HTTP ${error.code}", "The server answered HTTP ${error.code}")
                 },
             )
+        } catch (error: IOException) {
+            throw SetupException(L("Нет связи с сервером: ${error.message}", "No connection to the server: ${error.message}"))
+        } finally {
+            listener.cancel()
         }
         if (invite.isExpired()) throw SetupException(L("Приглашение устарело: запусти tossling invite ещё раз", "The invite has expired: run tossling invite again"))
         if (runCatching { ClipCipher.fromBase64(key = invite.key) }.isFailure) throw SetupException(L("Приглашение повреждено", "The invite is broken"))
@@ -119,7 +116,7 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
             client.publish(endpoint = joined.endpoint, topic = joined.room, message = ClipCipher.fromBase64(key = joined.key).sealToText(plain = SyncJson.encodeToString(ClipMeta.serializer(), hello).toByteArray()), body = null)
         }.onFailure { Log.write("could not say hello to the room: ${it.message}") }
         Log.write("joined the room of ${invite.name} on ${joined.server}")
-        return invite.name.ifEmpty { "Mac" }
+        return invite.name.ifEmpty { L("компьютер", "a computer") }
     }
 
     private fun withIdentity(settings: Settings): Settings =
