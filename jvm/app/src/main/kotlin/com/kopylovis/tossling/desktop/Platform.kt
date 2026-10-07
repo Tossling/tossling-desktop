@@ -34,10 +34,14 @@ object Platform {
             custom != null -> File(custom)
             os == Os.WINDOWS -> File(System.getenv("APPDATA") ?: System.getProperty("user.home"), "Tossling")
             os == Os.MAC -> File(System.getProperty("user.home"), "Library/Application Support/Tossling JVM")
-            else -> File(System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() } ?: "${System.getProperty("user.home")}/.config", "tossling")
+            else -> File(xdgConfig, "tossling")
         }
         dir.apply { mkdirs() }
     }
+
+    val xdgConfig: File get() = File(System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() } ?: "${System.getProperty("user.home")}/.config")
+
+    val xdgData: File get() = File(System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() } ?: "${System.getProperty("user.home")}/.local/share")
 
     val cache: File by lazy { File(home, "cache").apply { mkdirs() } }
 

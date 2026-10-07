@@ -71,9 +71,11 @@ fun main(args: Array<String>) {
     System.setProperty("apple.awt.UIElement", "true")
     if (Platform.os == Os.LINUX) nameTheWindows()
     val sending = args.dropWhile { it != "--send" }.drop(1)
+    val sendingClipboard = "--send-clipboard" in args
     if (sending.isNotEmpty()) Inbox.post(paths = sending)
+    if (sendingClipboard) Inbox.requestClipboard()
     if (!SingleInstance.acquire()) {
-        if (sending.isEmpty()) Log.write("Tossling is already running")
+        if (sending.isEmpty() && !sendingClipboard) Log.write("Tossling is already running")
         exitProcess(0)
     }
     val store = SettingsStore()
@@ -94,9 +96,10 @@ fun main(args: Array<String>) {
         if (!tray.install() && tray is LinuxTray) tray = AppTray(build = menu::build, onOpen = menu::opened).apply { install() }
     }
     ExplorerMenu.apply()
-    Inbox.watch { files ->
-        if (store.settings.value.isConfigured) room.sendFiles(files) else tray.notify(L("Сначала войди в комнату", "Join a room first"))
-    }
+    Inbox.watch(
+        onFiles = { files -> if (store.settings.value.isConfigured) room.sendFiles(files) else tray.notify(L("Сначала войди в комнату", "Join a room first")) },
+        onClipboard = { if (store.settings.value.isConfigured) room.sendNow() },
+    )
     Hotkey.start {
         if (store.settings.value.isConfigured) room.sendNow()
     }

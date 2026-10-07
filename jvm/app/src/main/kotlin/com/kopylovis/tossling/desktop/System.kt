@@ -21,10 +21,11 @@ object Autostart {
     private const val RUN_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
     private const val VALUE = "Tossling"
 
-    val isSupported: Boolean get() = Platform.os == Os.WINDOWS && Platform.executable != null
+    val isSupported: Boolean get() = Platform.os != Os.MAC && Platform.executable != null
 
     fun apply(enabled: Boolean) {
         if (!isSupported) return
+        if (Platform.os == Os.LINUX) return applyLinux(enabled)
         val command = "\"${Platform.executable}\""
         runCatching {
             val current = if (Advapi32Util.registryValueExists(WinReg.HKEY_CURRENT_USER, RUN_KEY, VALUE)) Advapi32Util.registryGetStringValue(WinReg.HKEY_CURRENT_USER, RUN_KEY, VALUE) else null
@@ -34,6 +35,26 @@ object Autostart {
             }
         }.onFailure { Log.write("could not change the start at login: ${it.message}") }
     }
+
+    private fun applyLinux(enabled: Boolean) {
+        val file = File(Platform.xdgConfig, "autostart/tossling.desktop")
+        runCatching {
+            if (!enabled) {
+                file.delete()
+                return
+            }
+            val entry = listOf(
+                "[Desktop Entry]",
+                "Type=Application",
+                "Name=Tossling",
+                "Exec=\"${Platform.executable}\"",
+                "X-GNOME-Autostart-enabled=true",
+            ).joinToString(separator = "\n", postfix = "\n")
+            if (file.isFile && file.readText() == entry) return
+            file.parentFile.mkdirs()
+            file.writeText(entry)
+        }.onFailure { Log.write("could not change the start at login: ${it.message}") }
+    }
 }
 
 object ExplorerMenu {
@@ -41,8 +62,9 @@ object ExplorerMenu {
     private val KEYS = listOf("Software\\Classes\\*\\shell\\Tossling", "Software\\Classes\\Directory\\shell\\Tossling")
 
     fun apply() {
-        val exe = Platform.executable
-        if (Platform.os != Os.WINDOWS || exe == null) return
+        val exe = Platform.executable ?: return
+        if (Platform.os == Os.LINUX) return applyLinux(exe)
+        if (Platform.os != Os.WINDOWS) return
         runCatching {
             KEYS.forEach { key ->
                 Advapi32Util.registryCreateKey(WinReg.HKEY_CURRENT_USER, "$key\\command")
@@ -51,6 +73,31 @@ object ExplorerMenu {
                 Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, "$key\\command", "", "\"$exe\" --send \"%1\"")
             }
         }.onFailure { Log.write("could not add Tossling to the Explorer menu: ${it.message}") }
+    }
+
+    private fun applyLinux(exe: String) {
+        val label = L("Отправить через Tossling", "Send via Tossling")
+        val data = Platform.xdgData
+        runCatching {
+            File(data, "nautilus/scripts").listFiles { file -> file.isFile && file.name != label && file.readText().contains("--send") && file.readText().contains(exe) }?.forEach { it.delete() }
+            write(File(data, "nautilus/scripts/$label"), "#!/bin/sh\nexec \"$exe\" --send \"$@\"\n", executable = true)
+            write(
+                File(data, "nemo/actions/tossling.nemo_action"),
+                "[Nemo Action]\nName=$label\nExec=\"$exe\" --send %F\nIcon-Name=document-send\nSelection=notnone\nExtensions=any;\n",
+            )
+            val service = "[Desktop Entry]\nType=Service\nMimeType=application/octet-stream;inode/directory;\nActions=send\nX-KDE-ServiceTypes=KonqPopupMenu/Plugin\n\n" +
+                "[Desktop Action send]\nName=$label\nIcon=document-send\nExec=\"$exe\" --send %F\n"
+            write(File(data, "kio/servicemenus/tossling.desktop"), service, executable = true)
+            write(File(data, "kservices5/ServiceMenus/tossling.desktop"), service)
+        }.onFailure { Log.write("could not add Tossling to the file manager menu: ${it.message}") }
+    }
+
+    private fun write(file: File, text: String, executable: Boolean = false) {
+        if (!file.isFile || file.readText() != text) {
+            file.parentFile.mkdirs()
+            file.writeText(text)
+        }
+        if (executable) file.setExecutable(true, true)
     }
 }
 
@@ -65,11 +112,19 @@ object Inbox {
         draft.renameTo(File(dir, "$name.send"))
     }
 
-    fun watch(onFiles: (List<File>) -> Unit) {
+    fun requestClipboard() {
+        File(dir, "${UUID.randomUUID()}.clip").createNewFile()
+    }
+
+    fun watch(onFiles: (List<File>) -> Unit, onClipboard: () -> Unit) {
         thread(isDaemon = true, name = "tossling-inbox") {
             val watcher = runCatching { FileSystems.getDefault().newWatchService().also { dir.toPath().register(it, StandardWatchEventKinds.ENTRY_CREATE) } }.getOrNull()
             while (true) {
                 drain(onFiles)
+                dir.listFiles { file -> file.name.endsWith(".clip") }?.takeIf { it.isNotEmpty() }?.let { requests ->
+                    requests.forEach { it.delete() }
+                    runCatching(onClipboard).onFailure { Log.write("could not send the clipboard: ${it.message}") }
+                }
                 val key = watcher?.poll(POLL_SECONDS, TimeUnit.SECONDS) ?: run {
                     if (watcher == null) Thread.sleep(POLL_SECONDS * 1000)
                     null
