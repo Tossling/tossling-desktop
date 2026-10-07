@@ -8,7 +8,6 @@ plugins {
 }
 
 val appVersion = rootDir.resolve("../VERSION").readText().trim()
-val packagedVersion = "1." + appVersion.substringAfter(".")
 
 kotlin {
     jvmToolchain(jdkVersion = 21)
@@ -34,7 +33,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Deb)
             packageName = "Tossling"
-            packageVersion = packagedVersion
+            packageVersion = appVersion
             vendor = "Tossling"
             description = "One clipboard for your computers and phone"
             modules("java.naming", "jdk.crypto.ec", "jdk.unsupported")
@@ -75,13 +74,12 @@ if (System.getProperty("os.name").startsWith("Windows")) {
         val wix = rootProject.layout.buildDirectory.dir("wix311").get().asFile
         val jpackage = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }.get().metadata.installationPath.file("bin/jpackage.exe").asFile
         val version = appVersion
-        val packaged = packagedVersion
         executable = jpackage.absolutePath
         args(
             "--type", "msi",
             "--app-image", image.absolutePath,
             "--name", "Tossling",
-            "--app-version", packaged,
+            "--app-version", version,
             "--vendor", "Tossling",
             "--description", "One clipboard for your computers and phone",
             "--resource-dir", resources.absolutePath,

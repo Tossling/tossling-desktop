@@ -203,10 +203,15 @@ server and shows the QR code for the phone. Text, images, files and folders (as 
 password managers are skipped. Win+Shift+C copies the selection and sends it, and Explorer gets «Send via Tossling»
 for files and folders. Updates come from a feed signed with the same Ed25519 key as the Mac appcast.
 
+What it changes in the system: a «Tossling» value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` to start at
+login (Settings → Start with Windows), the «Send via Tossling» entry in `HKCU\Software\Classes\*\shell` and
+`Directory\shell`, and the global Win+Shift+C (Ctrl+Alt+Shift+C when it is taken). Uninstalling in Settings → Apps removes
+the app, the autostart and the Explorer entry; the room and history stay in `%APPDATA%\Tossling` until you delete them.
+
 `Tossling-<version>.msi` in [Releases](https://github.com/tossling/tossling-desktop/releases) installs for the current
-user, no administrator rights needed. It is not code-signed yet, so Windows asks to confirm the first start
-(More info → Run anyway). Every push builds the MSI in the «Windows and Linux» workflow; `make publish` adds it to the
-release and updates the Windows feed.
+user, no administrator rights needed. Until the installers are signed (see [Code signing policy](#code-signing-policy)),
+Windows asks to confirm the first start (More info → Run anyway). Every push builds the MSI in the «Windows and Linux»
+workflow; `make publish` adds it to the release and updates the Windows feed.
 
 The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
 
@@ -218,6 +223,20 @@ cd jvm
 ```
 
 To work on the protocol and the app together, put `tossling.mobile=../../tossling-mobile` into `jvm/local.properties`.
+
+## Code signing policy
+
+Windows releases are signed with free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org). The installer is built from this repository by the «Windows and Linux»
+workflow on a version tag, and every signing request is approved by hand.
+
+- Committers and reviewers: [kopylovis](https://github.com/kopylovis)
+- Approvers: [kopylovis](https://github.com/kopylovis)
+
+Privacy: Tossling sends data only where you point it. The clipboard goes, encrypted on the device, to the ntfy server of
+your room, which you choose when you set it up. The app also checks for updates: the Mac at the Sparkle appcast, Windows
+at `https://monoroh.com/tossling/windows.json`, downloading new versions from GitHub Releases. Nothing else is sent, there
+is no analytics or telemetry.
 
 ## Reporting a vulnerability
 
