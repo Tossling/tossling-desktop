@@ -62,9 +62,13 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.imageio.ImageIO
+import javax.swing.JMenu
 import javax.swing.JOptionPane
 import javax.swing.JPopupMenu
 import javax.swing.SwingUtilities
+import javax.swing.Timer
+import javax.swing.event.MenuEvent
+import javax.swing.event.MenuListener
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
@@ -148,7 +152,10 @@ private class TrayMenu(
     private val onQuit: () -> Unit,
 ) {
 
-    fun build(menu: JPopupMenu) = menu.trayMenu()
+    fun build(menu: JPopupMenu) {
+        room.probe()
+        menu.trayMenu()
+    }
 
     private fun JPopupMenu.trayMenu() {
         val settings = store.settings.value
@@ -190,30 +197,22 @@ private class TrayMenu(
             dialog.files.takeIf { it.isNotEmpty() }?.let { room.sendFiles(it.toList()) }
         }
         submenu(text = L("Устройства", "Devices"), enabled = settings.isConfigured) {
-            val now = System.currentTimeMillis()
-            val others = room.roomState.value.members.values.filter { it.id != settings.deviceId }.sortedBy { it.since }
-            if (others.isEmpty()) item(text = L("Больше никого", "Nobody else yet"), enabled = false)
-            others.forEach { member ->
-                val online = now - member.seen < Room.ONLINE_MS
-                val state = if (online) L("на связи", "online") else ago(seen = member.seen, now = now)
-                submenu(text = "${if (online) "●" else "○"} ${room.nameOf(member)} — $state") {
-                    item(text = L("Переименовать…", "Rename…")) {
-                        rename(title = L("Как подписывать «${member.name}» на этом компьютере", "How this computer shows «${member.name}»"), current = room.nameOf(member)) { room.setAlias(id = member.id, alias = it) }
-                    }
-                    item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) {
-                        tasks.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
-                    }
+            devices()
+            var shown = presence()
+            val refresh = Timer(REFRESH_MS) {
+                val current = presence()
+                if (isPopupMenuVisible && current != shown) {
+                    shown = current
+                    removeAll()
+                    devices()
+                    popupMenu.pack()
                 }
             }
-            separator()
-            item(text = L("Этот компьютер: ${settings.deviceName}…", "This Computer: ${settings.deviceName}…")) {
-                rename(title = L("Имя этого компьютера в комнате", "The name of this computer in the room"), current = settings.deviceName) { name ->
-                    if (name.isNotEmpty()) room.rename(name = name)
-                }
-            }
-            item(text = L("Пригласить компьютер…", "Invite a Computer…")) { screens.inviting.value = true }
-            item(text = L("Подключить телефон…", "Connect a Phone…")) { screens.pairing.value = true }
-            item(text = L("Войти в другую комнату…", "Join Another Room…")) { screens.onboarding.value = true }
+            addMenuListener(object : MenuListener {
+                override fun menuSelected(event: MenuEvent) = refresh.start()
+                override fun menuDeselected(event: MenuEvent) = refresh.stop()
+                override fun menuCanceled(event: MenuEvent) = refresh.stop()
+            })
         }
         if (settings.isPaused) {
             item(text = L("Снова отправлять", "Resume Sending")) { store.update { it.copy(pausedUntil = 0.0) } }
@@ -248,6 +247,39 @@ private class TrayMenu(
         item(text = L("Открыть папку Tossling", "Open the Tossling Folder")) { runCatching { Desktop.getDesktop().open(Platform.downloads) } }
         separator()
         item(text = L("Выйти", "Quit"), action = onQuit)
+    }
+
+    private fun JMenu.devices() {
+        val settings = store.settings.value
+        val now = System.currentTimeMillis()
+        val others = room.roomState.value.members.values.filter { it.id != settings.deviceId }.sortedBy { it.since }
+        if (others.isEmpty()) item(text = L("Больше никого", "Nobody else yet"), enabled = false)
+        others.forEach { member ->
+            val online = now - member.seen < Room.ONLINE_MS
+            val state = if (online) L("на связи", "online") else ago(seen = member.seen, now = now)
+            submenu(text = "${if (online) "●" else "○"} ${room.nameOf(member)} — $state") {
+                item(text = L("Переименовать…", "Rename…")) {
+                    rename(title = L("Как подписывать «${member.name}» на этом компьютере", "How this computer shows «${member.name}»"), current = room.nameOf(member)) { room.setAlias(id = member.id, alias = it) }
+                }
+                item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) {
+                    tasks.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
+                }
+            }
+        }
+        separator()
+        item(text = L("Этот компьютер: ${settings.deviceName}…", "This Computer: ${settings.deviceName}…")) {
+            rename(title = L("Имя этого компьютера в комнате", "The name of this computer in the room"), current = settings.deviceName) { name ->
+                if (name.isNotEmpty()) room.rename(name = name)
+            }
+        }
+        item(text = L("Пригласить компьютер…", "Invite a Computer…")) { screens.inviting.value = true }
+        item(text = L("Подключить телефон…", "Connect a Phone…")) { screens.pairing.value = true }
+        item(text = L("Войти в другую комнату…", "Join Another Room…")) { screens.onboarding.value = true }
+    }
+
+    private fun presence(): String {
+        val now = System.currentTimeMillis()
+        return room.roomState.value.members.values.sortedBy { it.id }.joinToString { "${it.id}:${room.nameOf(it)}:${now - it.seen < Room.ONLINE_MS}" }
     }
 
     private fun rename(title: String, current: String, apply: (String) -> Unit) {
@@ -432,4 +464,5 @@ private fun resourcePainter(name: String): Painter = remember(name) {
 private val tasks = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 private const val RECENT = 10
+private const val REFRESH_MS = 700
 private const val TITLE = 48

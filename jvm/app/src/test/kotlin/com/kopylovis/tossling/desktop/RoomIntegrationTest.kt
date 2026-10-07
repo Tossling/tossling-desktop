@@ -59,6 +59,12 @@ class RoomIntegrationTest {
             laptop.room.roomState.value.members.containsKey("d2d2d2d2d2d2d2d2") && desktop.room.roomState.value.members.containsKey(joined.deviceId)
         }
 
+        val seenBefore = desktop.room.roomState.value.members.getValue(joined.deviceId).seen
+        delay(1_100)
+        desktop.room.probe()
+        waitFor("the laptop answers the probe") { desktop.room.roomState.value.members.getValue(joined.deviceId).seen > seenBefore }
+        log("a probe refreshed the other device")
+
         val code = Invites.newCode()
         val invited = async(Dispatchers.IO) { laptop.room.invite(code = code) }
         delay(1_500)

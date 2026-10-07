@@ -79,6 +79,8 @@ class Room(
 
     @Volatile private var lastSentAt = 0L
 
+    @Volatile private var lastProbe = 0L
+
     @Volatile private var invitation: Pair<String, CompletableDeferred<String>>? = null
 
     val roomState: StateFlow<RoomState> = state.value
@@ -154,6 +156,12 @@ class Room(
             !claim(digest = clip.digest, within = DUPLICATE_MS) -> Unit
             else -> prepared(clip)?.let { send(clip = it, seq = contentSeq.incrementAndGet(), announce = true) }
         }
+    }
+
+    fun probe() {
+        if (!settings.isConfigured || !_connected.value || now() - lastProbe < PROBE_MS) return
+        lastProbe = now()
+        scope.launch { runCatching { publishControl(kind = ClipMeta.PING) } }
     }
 
     fun sendFiles(files: List<File>) = scope.launch { files.forEach { sendFile(it) } }
@@ -687,6 +695,7 @@ class Room(
     companion object {
         const val LEGACY_PREFIX = "legacy-"
         const val ONLINE_MS = 5 * 60_000L
+        private const val PROBE_MS = 60_000L
         private const val MESSAGE_EVENT = "message"
         private const val TOKEN_LABEL = "tossling"
         private const val ROOM_BYTES = 12
