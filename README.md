@@ -225,8 +225,8 @@ StatusNotifierItem with a native menu: KDE, Xfce and Cinnamon show it as is, GNO
 which Ubuntu has built in. Tossling adds «Send via Tossling» to Nautilus (Scripts), Nemo and Dolphin, starts at login
 through `~/.config/autostart/tossling.desktop`, and on X11 Super+Shift+C (Ctrl+Alt+Shift+C when it is taken) sends the
 selected text. Wayland has no global shortcuts for apps: bind `/opt/tossling/bin/Tossling --send-clipboard` to a key in
-the system settings. Wayland sessions are not tested yet. There are no automatic updates on Linux yet: install the new
-`.deb` from Releases over the old one.
+the system settings. On Wayland Tossling runs through XWayland and still sees what you copy (checked on Ubuntu 20.04
+with GNOME 3.36). There are no automatic updates on Linux yet: install the new `.deb` from Releases over the old one.
 
 The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
 
