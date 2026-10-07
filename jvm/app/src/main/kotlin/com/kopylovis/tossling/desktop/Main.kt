@@ -39,14 +39,13 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.MenuScope
-import androidx.compose.ui.window.Notification
-import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import com.kopylovis.tossling.protocol.ClipKind
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.awt.FileDialog
@@ -57,6 +56,9 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.system.exitProcess
+import kotlinx.coroutines.flow.MutableStateFlow
+import javax.swing.JPopupMenu
+import javax.swing.SwingUtilities
 
 fun main() {
     System.setProperty("apple.awt.UIElement", "true")
@@ -68,58 +70,63 @@ fun main() {
     val history = History()
     val clipboard = systemClipboard()
     Log.write("Tossling ${Platform.version} on ${System.getProperty("os.name")}, data in ${Platform.home}")
+    val onboarding = MutableStateFlow(!store.settings.value.isConfigured)
+    val pairing = MutableStateFlow(false)
+    lateinit var tray: AppTray
+    val room = Room(store = store, clipboard = clipboard, history = history, notifier = { text -> tray.notify(text) })
+    tray = AppTray {
+        trayMenu(room = room, store = store, history = history, notifier = tray::notify, onPair = { pairing.value = true }, onSetup = { onboarding.value = true }, onQuit = {
+            tray.remove()
+            exitProcess(0)
+        })
+    }
+    SwingUtilities.invokeAndWait(tray::install)
     application {
-        val tray = rememberTrayState()
-        val notifier = remember { Notifier { text -> tray.sendNotification(Notification(title = "Tossling", message = text)) } }
-        val room = remember { Room(store = store, clipboard = clipboard, history = history, notifier = notifier) }
         val settings by store.settings.collectAsState()
-        var onboarding by remember { mutableStateOf(!store.settings.value.isConfigured) }
-        var pairing by remember { mutableStateOf(false) }
+        val showOnboarding by onboarding.collectAsState()
+        val showPairing by pairing.collectAsState()
         LaunchedEffect(Unit) {
             room.start()
-            room.removed.collect { onboarding = true }
+            room.removed.collect { onboarding.value = true }
         }
         LaunchedEffect(settings.autostart) { Autostart.apply(enabled = settings.autostart) }
-        Tray(
-            icon = resourcePainter("tray.png"),
-            state = tray,
-            tooltip = "Tossling",
-            menu = { TrayMenu(room = room, store = store, history = history, notifier = notifier, onPair = { pairing = true }, onSetup = { onboarding = true }) },
-        )
-        if (onboarding) {
+        if (showOnboarding) {
             OnboardingWindow(
                 store = store,
                 onDone = { joined ->
                     room.connect()
-                    onboarding = false
-                    if (joined == null) pairing = true else notifier.notify(L("Этот компьютер в комнате с $joined", "This computer is in the room with $joined"))
+                    onboarding.value = false
+                    if (joined == null) pairing.value = true else tray.notify(L("Этот компьютер в комнате с $joined", "This computer is in the room with $joined"))
                 },
-                onClose = { if (store.settings.value.isConfigured) onboarding = false else exitApplication() },
+                onClose = {
+                    if (store.settings.value.isConfigured) {
+                        onboarding.value = false
+                    } else {
+                        tray.remove()
+                        exitApplication()
+                    }
+                },
             )
         }
-        if (pairing && settings.isConfigured) PairWindow(payload = room.pairingPayload(), onClose = { pairing = false })
+        if (showPairing && settings.isConfigured) PairWindow(payload = room.pairingPayload(), onClose = { pairing.value = false })
     }
 }
 
-@Composable
-private fun MenuScope.TrayMenu(room: Room, store: SettingsStore, history: History, notifier: Notifier, onPair: () -> Unit, onSetup: () -> Unit) {
-    val settings by store.settings.collectAsState()
-    val connected by room.connected.collectAsState()
-    val state by room.roomState.collectAsState()
-    val items by history.items.collectAsState()
-    val scope = rememberCoroutineScope()
+private fun JPopupMenu.trayMenu(room: Room, store: SettingsStore, history: History, notifier: Notifier, onPair: () -> Unit, onSetup: () -> Unit, onQuit: () -> Unit) {
+    val settings = store.settings.value
     val time = DateTimeFormatter.ofPattern("HH:mm")
-    Item(text = "Tossling ${Platform.version}", enabled = false, onClick = {})
+    item(text = "Tossling ${Platform.version}", enabled = false)
     val status = when {
         !settings.isConfigured -> L("Не настроен", "Not set up")
         settings.isPaused -> L("Пауза до ${time.format(Instant.ofEpochMilli((settings.pausedUntil * 1000).toLong()).atZone(ZoneId.systemDefault()))}", "Paused until ${time.format(Instant.ofEpochMilli((settings.pausedUntil * 1000).toLong()).atZone(ZoneId.systemDefault()))}")
-        connected -> L("На связи: ${settings.server.substringAfter("://")}", "Connected to ${settings.server.substringAfter("://")}")
+        room.connected.value -> L("На связи: ${settings.server.substringAfter("://")}", "Connected to ${settings.server.substringAfter("://")}")
         else -> L("Нет связи с сервером", "No connection to the server")
     }
-    Item(text = status, enabled = false, onClick = {})
-    Separator()
+    item(text = status, enabled = false)
+    separator()
+    val items = history.items.value
     if (items.isEmpty()) {
-        Item(text = L("Пока ничего не было", "Nothing yet"), enabled = false, onClick = {})
+        item(text = L("Пока ничего не было", "Nothing yet"), enabled = false)
     } else {
         items.take(RECENT).forEach { item ->
             val arrow = if (item.incoming) "←" else "→"
@@ -128,63 +135,63 @@ private fun MenuScope.TrayMenu(room: Room, store: SettingsStore, history: Histor
                 ClipKind.IMAGE -> L("Картинка ${sizeText(item.size)}", "Image ${sizeText(item.size)}")
                 ClipKind.FILE -> item.name ?: L("Файл", "File")
             }
-            Item(text = "$arrow $title", onClick = { history.clip(item)?.let(room::copyAgain) })
+            item(text = "$arrow $title") { history.clip(item)?.let(room::copyAgain) }
         }
     }
-    Separator()
-    Item(text = L("Отправить буфер сейчас", "Send the Clipboard Now"), enabled = settings.isConfigured, onClick = { room.sendNow() })
-    Item(text = L("Отправить файл…", "Send a File…"), enabled = settings.isConfigured, onClick = {
+    separator()
+    item(text = L("Отправить буфер сейчас", "Send the Clipboard Now"), enabled = settings.isConfigured) { room.sendNow() }
+    item(text = L("Отправить файл…", "Send a File…"), enabled = settings.isConfigured) {
         val dialog = FileDialog(null as Frame?, L("Отправить в Tossling", "Send via Tossling"), FileDialog.LOAD).apply {
             isMultipleMode = true
             isVisible = true
         }
         dialog.files.takeIf { it.isNotEmpty() }?.let { room.sendFiles(it.toList()) }
-    })
-    Menu(text = L("Устройства", "Devices"), enabled = settings.isConfigured) {
+    }
+    submenu(text = L("Устройства", "Devices"), enabled = settings.isConfigured) {
         val now = System.currentTimeMillis()
-        val others = state.members.values.filter { it.id != settings.deviceId }.sortedBy { it.since }
-        if (others.isEmpty()) Item(text = L("Больше никого", "Nobody else yet"), enabled = false, onClick = {})
+        val others = room.roomState.value.members.values.filter { it.id != settings.deviceId }.sortedBy { it.since }
+        if (others.isEmpty()) item(text = L("Больше никого", "Nobody else yet"), enabled = false)
         others.forEach { member ->
             val online = now - member.seen < Room.ONLINE_MS
-            Menu(text = "${if (online) "●" else "○"} ${room.nameOf(member)}") {
-                Item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner, onClick = {
-                    scope.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
-                })
+            submenu(text = "${if (online) "●" else "○"} ${room.nameOf(member)}") {
+                item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) {
+                    tasks.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
+                }
             }
         }
-        Separator()
-        Item(text = L("Подключить телефон…", "Connect a Phone…"), onClick = onPair)
-        Item(text = L("Войти в другую комнату…", "Join Another Room…"), onClick = onSetup)
+        separator()
+        item(text = L("Подключить телефон…", "Connect a Phone…"), action = onPair)
+        item(text = L("Войти в другую комнату…", "Join Another Room…"), action = onSetup)
     }
     if (settings.isPaused) {
-        Item(text = L("Снова отправлять", "Resume Sending"), onClick = { store.update { it.copy(pausedUntil = 0.0) } })
+        item(text = L("Снова отправлять", "Resume Sending")) { store.update { it.copy(pausedUntil = 0.0) } }
     } else {
-        Menu(text = L("Пауза", "Pause")) {
+        submenu(text = L("Пауза", "Pause")) {
             val pause = { minutes: Long -> store.update { it.copy(pausedUntil = (System.currentTimeMillis() + minutes * 60_000) / 1000.0) } }
-            Item(text = L("На 15 минут", "For 15 Minutes"), onClick = { pause(15) })
-            Item(text = L("На час", "For an Hour"), onClick = { pause(60) })
-            Item(text = L("До завтра", "Until Tomorrow"), onClick = {
+            item(text = L("На 15 минут", "For 15 Minutes")) { pause(15) }
+            item(text = L("На час", "For an Hour")) { pause(60) }
+            item(text = L("До завтра", "Until Tomorrow")) {
                 val tomorrow = LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 store.update { it.copy(pausedUntil = tomorrow / 1000.0) }
-            })
-        }
-    }
-    Menu(text = L("Настройки", "Settings")) {
-        CheckboxItem(text = L("Отправлять при копировании", "Send When Copied"), checked = settings.auto, onCheckedChange = { on -> store.update { it.copy(auto = on) } })
-        CheckboxItem(text = L("Отправлять картинки", "Send Images"), checked = settings.images, onCheckedChange = { on -> store.update { it.copy(images = on) } })
-        CheckboxItem(text = L("Уведомления", "Notifications"), checked = settings.notifications, onCheckedChange = { on -> store.update { it.copy(notifications = on) } })
-        if (Autostart.isSupported) {
-            CheckboxItem(text = L("Запускать вместе с Windows", "Start with Windows"), checked = settings.autostart, onCheckedChange = { on -> store.update { it.copy(autostart = on) } })
-        }
-        Menu(text = L("Язык", "Language")) {
-            listOf("auto" to L("Как в системе", "System"), "en" to "English", "ru" to "Русский").forEach { (code, title) ->
-                CheckboxItem(text = title, checked = settings.language == code, onCheckedChange = { store.update { it.copy(language = code) } })
             }
         }
     }
-    Item(text = L("Открыть папку Tossling", "Open the Tossling Folder"), onClick = { runCatching { Desktop.getDesktop().open(Platform.downloads) } })
-    Separator()
-    Item(text = L("Выйти", "Quit"), onClick = { exitProcess(0) })
+    submenu(text = L("Настройки", "Settings")) {
+        check(text = L("Отправлять при копировании", "Send When Copied"), checked = settings.auto) { on -> store.update { it.copy(auto = on) } }
+        check(text = L("Отправлять картинки", "Send Images"), checked = settings.images) { on -> store.update { it.copy(images = on) } }
+        check(text = L("Уведомления", "Notifications"), checked = settings.notifications) { on -> store.update { it.copy(notifications = on) } }
+        if (Autostart.isSupported) {
+            check(text = L("Запускать вместе с Windows", "Start with Windows"), checked = settings.autostart) { on -> store.update { it.copy(autostart = on) } }
+        }
+        submenu(text = L("Язык", "Language")) {
+            listOf("auto" to L("Как в системе", "System"), "en" to "English", "ru" to "Русский").forEach { (code, title) ->
+                check(text = title, checked = settings.language == code) { store.update { it.copy(language = code) } }
+            }
+        }
+    }
+    item(text = L("Открыть папку Tossling", "Open the Tossling Folder")) { runCatching { Desktop.getDesktop().open(Platform.downloads) } }
+    separator()
+    item(text = L("Выйти", "Quit"), action = onQuit)
 }
 
 @Composable
@@ -293,6 +300,8 @@ private fun PairWindow(payload: String, onClose: () -> Unit) {
 private fun resourcePainter(name: String): Painter = remember(name) {
     BitmapPainter(Room::class.java.getResourceAsStream("/$name")!!.use(ImageIO::read).toComposeImageBitmap())
 }
+
+private val tasks = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 private const val RECENT = 10
 private const val TITLE = 48
