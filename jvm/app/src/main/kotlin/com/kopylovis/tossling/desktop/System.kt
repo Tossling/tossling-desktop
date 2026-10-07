@@ -89,8 +89,43 @@ object ExplorerMenu {
                 "[Desktop Action send]\nName=$label\nIcon=document-send\nExec=\"$exe\" --send %F\n"
             write(File(data, "kio/servicemenus/tossling.desktop"), service, executable = true)
             write(File(data, "kservices5/ServiceMenus/tossling.desktop"), service)
+            File(Platform.xdgConfig, "caja/scripts").listFiles { file -> file.isFile && file.name != label && file.readText().contains("--send") && file.readText().contains(exe) }?.forEach { it.delete() }
+            write(File(Platform.xdgConfig, "caja/scripts/$label"), "#!/bin/sh\nexec \"$exe\" --send \"$@\"\n", executable = true)
+            thunarAction(exe = exe, label = label)
         }.onFailure { Log.write("could not add Tossling to the file manager menu: ${it.message}") }
     }
+
+    private fun thunarAction(exe: String, label: String) {
+        val file = File(Platform.xdgConfig, "Thunar/uca.xml")
+        if (!file.parentFile.isDirectory) return
+        val action = listOf(
+            "<action>",
+            "\t<icon>document-send</icon>",
+            "\t<name>$label</name>",
+            "\t<unique-id>$THUNAR_ID</unique-id>",
+            "\t<command>&quot;$exe&quot; --send %F</command>",
+            "\t<description>$label</description>",
+            "\t<patterns>*</patterns>",
+            "\t<directories/>",
+            "\t<audio-files/>",
+            "\t<image-files/>",
+            "\t<other-files/>",
+            "\t<text-files/>",
+            "\t<video-files/>",
+            "</action>",
+        ).joinToString(separator = "\n")
+        val current = if (file.isFile) file.readText() else "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<actions>\n</actions>\n"
+        val updated = withThunarAction(xml = current, action = action) ?: return
+        if (updated != current) file.writeText(updated)
+    }
+
+    fun withThunarAction(xml: String, action: String): String? {
+        val without = xml.replace(Regex("<action>(?:(?!</action>).)*?<unique-id>$THUNAR_ID</unique-id>.*?</action>\\s*", RegexOption.DOT_MATCHES_ALL), "")
+        if (!without.contains("</actions>")) return null
+        return without.replace("</actions>", "$action\n</actions>")
+    }
+
+    private const val THUNAR_ID = "tossling-send"
 
     private fun write(file: File, text: String, executable: Boolean = false) {
         if (!file.isFile || file.readText() != text) {

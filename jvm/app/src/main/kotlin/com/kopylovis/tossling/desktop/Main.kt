@@ -52,12 +52,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.Toolkit
+import java.net.URI
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -133,6 +135,19 @@ fun main(args: Array<String>) {
                     }
                 },
             )
+        }
+        val trayShown by tray.shown.collectAsState()
+        var trayDue by remember { mutableStateOf(false) }
+        var trayHintClosed by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            delay(TRAY_WAIT_MS)
+            trayDue = true
+        }
+        if (trayDue && !trayShown && !trayHintClosed && !showOnboarding) {
+            NoTrayWindow(onClose = { trayHintClosed = true }, onQuit = {
+                tray.remove()
+                exitApplication()
+            })
         }
         if (showPairing && settings.isConfigured) PairWindow(payload = room.pairingPayload(), onClose = { pairing.value = false })
         if (showInvite && settings.isConfigured) InviteWindow(room = room, server = settings.server, onClose = { screens.inviting.value = false })
@@ -270,6 +285,33 @@ private class TrayMenu(
         val name = JOptionPane.showInputDialog(null, title, "Tossling", JOptionPane.PLAIN_MESSAGE, null, null, current) as? String ?: return
         apply(name.trim())
     }
+}
+
+@Composable
+private fun NoTrayWindow(onClose: () -> Unit, onQuit: () -> Unit) {
+    Window(onCloseRequest = onClose, title = "Tossling", icon = resourcePainter("icon.png"), state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(500.dp, 300.dp)), resizable = false) {
+        TosslingTheme {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = L(
+                        "Tossling работает и синхронизирует буфер, но на этом рабочем столе некуда поставить его значок. В GNOME поставь расширение «AppIndicator and KStatusNotifierItem Support»: значок появится сам, перезапускать Tossling не нужно.",
+                        "Tossling is running and syncs the clipboard, but this desktop has no place for its icon. On GNOME install the «AppIndicator and KStatusNotifierItem Support» extension: the icon appears by itself, no restart needed.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { openLink(APPINDICATOR_URL) }) { Text(L("Открыть расширение", "Open the Extension")) }
+                    OutlinedButton(onClick = onClose) { Text(L("Закрыть", "Close")) }
+                    OutlinedButton(onClick = onQuit) { Text(L("Выйти", "Quit")) }
+                }
+            }
+        }
+    }
+}
+
+private fun openLink(url: String) {
+    runCatching { Desktop.getDesktop().browse(URI(url)) }.recoverCatching { ProcessBuilder("xdg-open", url).start() }
+        .onFailure { Log.write("could not open $url: ${it.message}") }
 }
 
 private fun ago(seen: Long, now: Long): String {
@@ -455,4 +497,6 @@ private fun nameTheWindows() {
 private val tasks = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 private const val RECENT = 10
+private const val TRAY_WAIT_MS = 15_000L
+private const val APPINDICATOR_URL = "https://extensions.gnome.org/extension/615/appindicator-support/"
 private const val TITLE = 48

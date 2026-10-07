@@ -5,6 +5,9 @@ import com.formdev.flatlaf.FlatLaf
 import com.formdev.flatlaf.FlatLightLaf
 import com.sun.jna.platform.win32.Advapi32Util
 import com.sun.jna.platform.win32.WinReg
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.awt.Color
 import java.awt.Image
 import java.awt.MouseInfo
@@ -25,6 +28,7 @@ import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 
 interface TrayHost {
+    val shown: StateFlow<Boolean>
     fun install(): Boolean
     fun remove()
     fun notify(text: String)
@@ -33,6 +37,9 @@ interface TrayHost {
 class AppTray(private val build: () -> List<MenuEntry>, private val onOpen: () -> Unit) : TrayHost {
 
     private var icon: TrayIcon? = null
+    private val _shown = MutableStateFlow(false)
+
+    override val shown: StateFlow<Boolean> = _shown.asStateFlow()
 
     override fun install(): Boolean {
         if (!SystemTray.isSupported()) {
@@ -49,12 +56,14 @@ class AppTray(private val build: () -> List<MenuEntry>, private val onOpen: () -
         }
         SystemTray.getSystemTray().add(trayIcon)
         icon = trayIcon
+        _shown.value = true
         return true
     }
 
     override fun remove() {
         icon?.let { SystemTray.getSystemTray().remove(it) }
         icon = null
+        _shown.value = false
     }
 
     override fun notify(text: String) {

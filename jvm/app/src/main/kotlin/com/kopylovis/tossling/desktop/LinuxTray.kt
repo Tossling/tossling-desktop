@@ -2,6 +2,9 @@
 
 package com.kopylovis.tossling.desktop
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.freedesktop.dbus.Struct
 import org.freedesktop.dbus.Tuple
 import org.freedesktop.dbus.annotations.DBusInterfaceName
@@ -74,6 +77,9 @@ class MenuEvent(@JvmField @field:Position(0) val id: Int, @JvmField @field:Posit
 class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: () -> Unit) : TrayHost {
 
     private var connection: DBusConnection? = null
+    private val _shown = MutableStateFlow(false)
+
+    override val shown: StateFlow<Boolean> = _shown.asStateFlow()
     private val name = "org.kde.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
     private val ticker = Executors.newSingleThreadScheduledExecutor { Thread(it, "tray-refresh").apply { isDaemon = true } }
     private val menu = MenuTree()
@@ -85,7 +91,8 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
         bus.exportObject(ITEM_PATH, Item())
         bus.exportObject(MENU_PATH, menu)
         bus.addSigHandler(DBus.NameOwnerChanged::class.java) { signal ->
-            if (signal.name == WATCHER && signal.newOwner.isNotEmpty()) register()
+            if (signal.name != WATCHER) return@addSigHandler
+            if (signal.newOwner.isNotEmpty()) register() else _shown.value = false
         }
         menu.refresh(announce = false)
         register()
@@ -103,6 +110,7 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
         ticker.shutdownNow()
         runCatching { connection?.close() }
         connection = null
+        _shown.value = false
     }
 
     override fun notify(text: String) {
@@ -117,6 +125,7 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
         val bus = connection ?: return
         runCatching {
             bus.getRemoteObject(WATCHER, "/StatusNotifierWatcher", StatusNotifierWatcher::class.java).RegisterStatusNotifierItem(name)
+            _shown.value = true
             Log.write("the tray icon is in the panel")
         }.onFailure { Log.write("no panel for tray icons yet (${it.message}): waiting for one") }
     }
