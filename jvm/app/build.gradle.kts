@@ -47,6 +47,10 @@ compose.desktop {
                 iconFile.set(project.file("icons/tossling.ico"))
             }
             linux {
+                packageName = "tossling"
+                shortcut = true
+                menuGroup = "Utility"
+                appCategory = "Utility"
                 iconFile.set(project.file("icons/tossling.png"))
             }
         }

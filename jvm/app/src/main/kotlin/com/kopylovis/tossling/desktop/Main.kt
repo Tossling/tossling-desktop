@@ -448,7 +448,7 @@ private fun resourcePainter(name: String): Painter = remember(name) {
 private fun nameTheWindows() {
     runCatching {
         val toolkit = Toolkit.getDefaultToolkit()
-        toolkit.javaClass.getDeclaredField("awtAppClassName").apply { isAccessible = true }.set(toolkit, "Tossling")
+        toolkit.javaClass.getDeclaredField("awtAppClassName").apply { isAccessible = true }.set(toolkit, "tossling-Tossling")
     }.onFailure { Log.write("could not name the windows: ${it.message}") }
 }
 
