@@ -11,6 +11,10 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
     func start() {
         guard isDistributed, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: self)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let updater = self?.controller?.updater, updater.automaticallyChecksForUpdates, !updater.sessionInProgress else { return }
+            updater.checkForUpdatesInBackground()
+        }
     }
 
     var available: Bool { controller != nil }
@@ -27,7 +31,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
     func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
-        immediateFocus
+        false
     }
 
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {

@@ -55,7 +55,7 @@ Applications and open it (or `brew install --cask tossling/tap/tossling`). The a
 start it asks for the server address and the token, or for an invite code from another Mac, then shows a QR code for
 the phone. It lives in the menu bar afterwards.
 
-Updates come by themselves since 0.3: once a day the app looks for a new version (Sparkle, the update is signed with
+Updates come by themselves since 0.3: at start and once a day the app looks for a new version (Sparkle, the update is signed with
 Tossling's update key and with the same Developer ID) and offers it in the menu; «Check for Updates…» asks right away.
 Builds from source are not updated this way.
 
