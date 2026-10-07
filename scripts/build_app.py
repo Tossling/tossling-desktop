@@ -24,7 +24,7 @@ SPARKLE_VERSION = "2.10.0"
 SPARKLE_SHA256 = "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
 SPARKLE_DIR = os.path.join(ROOT, "build", "cache", f"sparkle-{SPARKLE_VERSION}")
 SPARKLE_ACCOUNT = "tossling"
-SPARKLE_PUBLIC_KEY = os.environ.get("TOSSLING_SPARKLE_PUBLIC_KEY", "")
+SPARKLE_PUBLIC_KEY = "ZS/cGMRgf1n4zmwdXpGqy96Yi1pHypgQJp+Ff30pu/A="
 FEED_URL = "https://monoroh.com/tossling/appcast.xml"
 DOWNLOAD_URL = "https://github.com/tossling/tossling-desktop/releases/download/v{version}/{name}"
 NOTES_URL = "https://github.com/tossling/tossling-desktop/releases/tag/v{version}"

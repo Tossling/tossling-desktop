@@ -185,7 +185,7 @@ make publish NOTES=notes.md  # tag, GitHub release, cask in tossling/homebrew-ta
 ```
 
 `make app` downloads Sparkle (pinned version and checksum) into `build/cache`. A release needs the Sparkle key in the
-login keychain (`generate_keys --account tossling`); its public half is `SPARKLE_PUBLIC_KEY` in `scripts/build_app.py`.
+login keychain (`generate_keys --account tossling`); its public half is `SPARKLE_PUBLIC_KEY` in `scripts/build_app.py`. Keep a copy of the private key (`generate_keys --account tossling -x <file>`): without it, installed apps cannot be updated.
 
 When `/Applications/Tossling.app` is installed, a source `tossling` hands every command to the app's own copy, so the two
 never fight over the helper; set `TOSSLING_FROM_SOURCE=1` to run the source copy anyway.
