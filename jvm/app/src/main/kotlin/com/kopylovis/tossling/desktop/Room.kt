@@ -114,6 +114,18 @@ class Room(
                 delay(MAINTENANCE_MS)
             }
         }
+        scope.launch {
+            var last = System.currentTimeMillis()
+            while (isActive) {
+                delay(WAKE_CHECK_MS)
+                val current = System.currentTimeMillis()
+                if (current - last > WAKE_GAP_MS && settings.isConfigured) {
+                    Log.write("the computer woke up: connecting again")
+                    connect()
+                }
+                last = current
+            }
+        }
         connect()
     }
 
@@ -677,6 +689,8 @@ class Room(
         private const val ECHO_MS = 60_000L
         private const val SETTLE_MS = 150L
         private const val FIRST_RETRY_MS = 1_000L
+        private const val WAKE_CHECK_MS = 5_000L
+        private const val WAKE_GAP_MS = 30_000L
         private const val AUTH_RETRY_MS = 30_000L
         private const val MAX_RETRY_MS = 60_000L
         private const val MAINTENANCE_DELAY_MS = 30_000L
