@@ -55,9 +55,10 @@ def artifact(run_id, name, directory):
 
 def linux(v, tag, run_id):
     with tempfile.TemporaryDirectory() as tmp:
-        files = [artifact(run_id, name, tmp) for name in (f"tossling_{v}_amd64.deb", f"Tossling-{v}-linux-x64.tar.gz")]
+        names = (f"tossling_{v}_amd64.deb", f"Tossling-{v}-linux-x64.tar.gz", f"tossling_{v}_arm64.deb", f"Tossling-{v}-linux-arm64.tar.gz")
+        files = [artifact(run_id, name, tmp) for name in names]
         run("gh", "release", "upload", tag, *files, "-R", REPO, "--clobber")
-    print("The Linux .deb and tar.gz added to", tag)
+    print("The Linux .deb and tar.gz for x86-64 and arm64 added to", tag)
 
 
 def windows(v, tag):
