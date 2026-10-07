@@ -191,8 +191,9 @@ When `/Applications/Tossling.app` is installed, a source `tossling` hands every 
 never fight over the helper; set `TOSSLING_FROM_SOURCE=1` to run the source copy anyway.
 
 `cli/` is the `tossling` command (Python from macOS), `mac/Tossling` the helper, `mac/TosslingFinder` the Finder extension.
-The crypto test vectors `mac/Tossling/vectors.json` must stay identical to the ones in tossling-mobile: both sides test
-against them. CLI tests run on a temporary `HOME` and never touch the running helper.
+The protocol is described in [PROTOCOL.md](https://github.com/tossling/tossling-server/blob/main/docs/PROTOCOL.md) in
+the server repository. `mac/Tossling/vectors.json` is a copy of its `docs/vectors.json`, the same file tossling-mobile
+tests against; `make selftest` checks the Mac code with it. CLI tests run on a temporary `HOME` and never touch the running helper.
 
 ## Reporting a vulnerability
 
