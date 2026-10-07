@@ -24,6 +24,7 @@ import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JPopupMenu
 import javax.swing.SwingUtilities
+import javax.swing.UIManager
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 
@@ -36,9 +37,8 @@ class AppTray(private val build: JPopupMenu.() -> Unit) {
             Log.write("this desktop has no system tray")
             return
         }
-        MenuTheme.apply()
-        val size = SystemTray.getSystemTray().trayIconSize.width.coerceAtLeast(16)
-        val trayIcon = TrayIcon(TrayGlyph.image(size = size), "Tossling").apply {
+        MenuTheme.ensure()
+        val trayIcon = TrayIcon(glyph(), "Tossling").apply {
             addMouseListener(object : MouseAdapter() {
                 override fun mouseReleased(event: MouseEvent) {
                     if (event.button == MouseEvent.BUTTON1 || event.isPopupTrigger) SwingUtilities.invokeLater(::open)
@@ -58,7 +58,10 @@ class AppTray(private val build: JPopupMenu.() -> Unit) {
         icon?.displayMessage("Tossling", text, TrayIcon.MessageType.NONE)
     }
 
+    private fun glyph(): Image = TrayGlyph.image(size = SystemTray.getSystemTray().trayIconSize.width.coerceAtLeast(16))
+
     private fun open() {
+        if (MenuTheme.ensure()) icon?.image = glyph()
         val point = MouseInfo.getPointerInfo()?.location ?: return
         val anchor = JDialog().apply {
             isUndecorated = true
@@ -149,8 +152,18 @@ object SystemTheme {
 
 object MenuTheme {
 
-    fun apply() {
-        val light = SystemTheme.isLight
+    private var light: Boolean? = null
+
+    fun ensure(): Boolean {
+        val wanted = SystemTheme.isLight
+        if (wanted == light && UIManager.getLookAndFeel() is FlatLaf) return false
+        val changed = light != null && wanted != light
+        apply(light = wanted)
+        this.light = wanted
+        return changed
+    }
+
+    private fun apply(light: Boolean) {
         val text = if (light) "#1A1A1A" else "#FFFFFF"
         FlatLaf.setGlobalExtraDefaults(
             mapOf(
