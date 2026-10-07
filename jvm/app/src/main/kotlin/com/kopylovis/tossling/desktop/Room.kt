@@ -73,7 +73,7 @@ class Room(
     private val _removed = MutableSharedFlow<String>(extraBufferCapacity = 1)
     private var session: Job? = null
 
-    @Volatile private var lastReceived: Pair<String, Long>? = null
+    @Volatile private var lastReceived: Pair<Set<String>, Long>? = null
 
     @Volatile private var lastSent = ""
 
@@ -144,7 +144,7 @@ class Room(
     fun sendFiles(files: List<File>) = scope.launch { files.forEach { sendFile(it) } }
 
     fun copyAgain(clip: Clip) {
-        lastReceived = clip.digest to System.currentTimeMillis()
+        lastReceived = setOf(clip.digest, clipboard.echo(clip)) to System.currentTimeMillis()
         clipboard.write(clip)
     }
 
@@ -347,7 +347,7 @@ class Room(
             Log.write("← $from: the text is already in the clipboard, skipped")
             return
         }
-        lastReceived = clip.digest to now()
+        lastReceived = setOf(clip.digest, clipboard.echo(clip)) to now()
         clipboard.write(clip)
         val what = when (clip) {
             is Clip.Text -> {
@@ -452,7 +452,7 @@ class Room(
         }
         val clip = clipboard.read() ?: return
         val digest = clip.digest
-        lastReceived?.let { (received, at) -> if (received == digest && now() - at < ECHO_MS) return }
+        lastReceived?.let { (received, at) -> if (digest in received && now() - at < ECHO_MS) return }
         if (digest == lastSent) return
         lastSent = digest
         if (clip is Clip.Files) {

@@ -39,6 +39,7 @@ interface SystemClipboard {
     fun read(): Clip?
     fun isPrivate(): Boolean
     fun write(clip: Clip)
+    fun echo(clip: Clip): String = clip.digest
 }
 
 fun systemClipboard(): SystemClipboard = if (Platform.os == Os.WINDOWS) WindowsClipboard() else PollingClipboard()
@@ -74,6 +75,11 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
             is Clip.Files -> FileSelection(clip.files)
         }
         retry { clipboard.setContents(transferable, this) }
+    }
+
+    override fun echo(clip: Clip): String = when (clip) {
+        is Clip.Image -> runCatching { ImageIO.read(ByteArrayInputStream(clip.bytes))?.let(::pngOf)?.let(::sha256) }.getOrNull() ?: clip.digest
+        else -> clip.digest
     }
 
     override fun lostOwnership(clipboard: Clipboard?, contents: Transferable?) = Unit
