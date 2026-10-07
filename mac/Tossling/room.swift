@@ -1,6 +1,20 @@
 import AppKit
 import CryptoKit
 
+func channelPrefix(_ server: String) -> String {
+    guard let url = URL(string: trimmedServer(server) + "/v1/tossling/health") else { return "tossy-" }
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 10
+    let (code, data) = runSync(request)
+    guard code == 200, let health = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          health["server"] as? String == "tossling-server" else { return "tossy-" }
+    return "tossling-"
+}
+
+func isRoomTopic(_ topic: String) -> Bool {
+    topic.hasPrefix("tossling-") || topic.hasPrefix("tossy-")
+}
+
 func randomHex(_ bytes: Int) -> String {
     (0..<bytes).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
 }
@@ -64,11 +78,12 @@ func revokeDevice(_ id: String) {
     let name = (members[id]?["name"] as? String).map { conf.aliases[id] ?? $0 } ?? L("устройство", "a device")
     let others = members.filter { $0.key != id && $0.key != conf.deviceID && !$0.key.hasPrefix("legacy-") }
     let isLegacy = others.values.contains { memberKey($0) == nil }
-    let room = "tossy-" + randomHex(12)
+    let suffix = randomHex(12)
     let key = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.base64EncodedString()
     let oldToken = conf.token
     DispatchQueue.global(qos: .userInitiated).async {
-        let token = isLegacy || oldToken.isEmpty ? nil : createToken(label: "tossy")
+        let room = channelPrefix(conf.server) + suffix
+        let token = isLegacy || oldToken.isEmpty ? nil : createToken(label: "tossling")
         DispatchQueue.main.async {
             publish(kind: "kick", mime: "text/plain", data: Data(), text: "", extra: ["to": [id]]) { kicked in
                 guard kicked else {

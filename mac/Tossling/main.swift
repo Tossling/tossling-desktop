@@ -189,9 +189,9 @@ func normalizedCode(_ code: String) -> String {
     code.uppercased().filter { $0.isLetter || $0.isNumber }
 }
 
-func inviteTopic(_ code: String) -> String {
+func inviteTopic(_ code: String, prefix: String) -> String {
     let hash = SHA256.hash(data: Data("tossy-invite-topic:\(normalizedCode(code))".utf8))
-    return "tossy-inv-" + hash.prefix(12).map { String(format: "%02x", $0) }.joined()
+    return prefix + "inv-" + hash.prefix(12).map { String(format: "%02x", $0) }.joined()
 }
 
 func inviteKey(_ code: String) -> SymmetricKey {
@@ -250,8 +250,9 @@ func trimmedServer(_ server: String) -> String {
 
 if !joinCode.isEmpty {
     let server = trimmedServer(joinServer.hasPrefix("http") ? joinServer : "https://" + joinServer)
-    let topic = inviteTopic(joinCode)
-    guard let url = URL(string: "\(server)/\(topic)/json") else {
+    let topics = channelPrefix(server) == "tossling-" ? [inviteTopic(joinCode, prefix: "tossling-"), inviteTopic(joinCode, prefix: "tossy-")] : [inviteTopic(joinCode, prefix: "tossy-")]
+    var topic = topics[0]
+    guard let url = URL(string: "\(server)/\(topics.joined(separator: ","))/json") else {
         print(L("не понял адрес сервера: \(joinServer)", "could not read the server address: \(joinServer)"))
         exit(3)
     }
@@ -266,11 +267,12 @@ if !joinCode.isEmpty {
               let parsed = (try? JSONSerialization.jsonObject(with: opened)) as? [String: Any] else { return false }
         plain = opened
         invite = parsed
+        topic = event["topic"] as? String ?? topic
         return true
     }
     guard result.found else {
         switch result.code {
-        case 401, 403: print(L("сервер не пускает к приглашениям: ntfy access everyone 'tossy-inv-*' read-only", "the server does not let anyone read invites: allow anonymous read on tossy-inv-*"))
+        case 401, 403: print(L("сервер не пускает к приглашениям: нужно анонимное чтение каналов приглашений", "the server does not let anyone read invites: anonymous read on invite channels is needed"))
         case 200: print(L("приглашение не пришло: на первом Mac должна идти tossling invite с этим кодом", "the invite did not come: the first Mac must be running tossling invite with this code"))
         default: print(L("нет связи с сервером: HTTP \(result.code)", "no connection to the server: HTTP \(result.code)"))
         }
@@ -380,8 +382,10 @@ if !setupServer.isEmpty {
     let server = normalizedServer(setupServer)
     let wait = DispatchSemaphore(value: 0)
     var trouble: String?
-    checkServer(server, token: token) { problem in
+    var prefix = ""
+    checkServer(server, token: token) { problem, found in
         trouble = problem
+        prefix = found
         wait.signal()
     }
     while wait.wait(timeout: .now()) == .timedOut { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
@@ -389,7 +393,7 @@ if !setupServer.isEmpty {
         print(trouble)
         exit(1)
     }
-    guard writeNewConfig(newRoom(server: server, token: token, deviceID: existingDeviceID(configFile)), to: configFile) else {
+    guard writeNewConfig(newRoom(server: server, token: token, deviceID: existingDeviceID(configFile), prefix: prefix), to: configFile) else {
         print(L("не записал настройки в \(configFile)", "could not save the settings to \(configFile)"))
         exit(1)
     }
@@ -427,7 +431,7 @@ if !inviteCode.isEmpty {
         print(L("сначала tossling on: старые настройки без комнаты", "run tossling on first: the old settings have no room"))
         exit(2)
     }
-    let topic = inviteTopic(inviteCode)
+    let topic = inviteTopic(inviteCode, prefix: channelPrefix(conf.server))
     var invite: [String: Any] = ["s": conf.server, "t": conf.token, "r": conf.room, "k": conf.keyText,
                                  "n": conf.deviceName, "exp": Date().timeIntervalSince1970 + 600]
     if !conf.owner.isEmpty { invite["o"] = conf.owner }

@@ -114,7 +114,7 @@ def migrate():
             write_conf(device_id=secrets.token_hex(8))
         return False
     conf = {k: v for k, v in c.items() if k not in ("to_mac", "to_phone")}
-    conf.update(room=f"tossy-{secrets.token_hex(12)}", legacy_to_mac=c["to_mac"], legacy_to_phone=c["to_phone"],
+    conf.update(room=f"{channel_prefix(c.get('server', ''))}{secrets.token_hex(12)}", legacy_to_mac=c["to_mac"], legacy_to_phone=c["to_phone"],
                 device_id=c.get("device_id") or secrets.token_hex(8))
     save_conf(conf)
     return True
@@ -160,9 +160,25 @@ def normalize_server(value):
     return value
 
 
+def channel_prefix(server):
+    code, raw = http("GET", f"{server.rstrip('/')}/v1/tossling/health", "", timeout=10) if server else (0, b"")
+    try:
+        return "tossling-" if code == 200 and json.loads(raw).get("server") == "tossling-server" else "tossy-"
+    except ValueError:
+        return "tossy-"
+
+
+def api(method, base, path, token, body=None, headers=None):
+    code, raw = http(method, f"{base}/v1/tossling/{path}", token, body, headers)
+    if code == 404 and not raw.strip().startswith(b"{\"error\""):
+        code, raw = http(method, f"{base}/v1/tossy/{path}", token, body, headers)
+    return code, raw
+
+
 def new_channel():
-    device_id = read_conf().get("device_id") or secrets.token_hex(8)
-    return {"room": f"tossy-{secrets.token_hex(12)}", "key": base64.b64encode(secrets.token_bytes(32)).decode(),
+    conf = read_conf()
+    device_id = conf.get("device_id") or secrets.token_hex(8)
+    return {"room": f"{channel_prefix(conf.get('server', ''))}{secrets.token_hex(12)}", "key": base64.b64encode(secrets.token_bytes(32)).decode(),
             "device_id": device_id, "owner": device_id, "legacy_to_mac": "", "legacy_to_phone": ""}
 
 
@@ -196,7 +212,7 @@ def setup():
         sys.exit(t(f"{BAD} сервер не принял токен: HTTP {code} {error_text(raw)}", f"{BAD} the server refused the token: HTTP {code} {error_text(raw)}"))
     user = json.loads(raw).get("username", "?")
     print(t(f"{OK} {server}, пользователь {user}", f"{OK} {server}, user {user}"))
-    probe = f"tossy-probe-{secrets.token_hex(6)}"
+    probe = f"{channel_prefix(server)}probe-{secrets.token_hex(6)}"
     code, raw = http("PUT", f"{server}/{probe}", token, body=b"probe", headers={"X-Filename": "probe.bin"})
     if code != 200:
         print(t(f"{WARN} не могу публиковать: HTTP {code} {error_text(raw)} — проверь права пользователя на сервере", f"{WARN} cannot publish: HTTP {code} {error_text(raw)}; check the user's access on the server"))
@@ -206,6 +222,7 @@ def setup():
         print(t(f"{OK} вложения работают, картинки пройдут", f"{OK} attachments work, images will get through"))
     values = {"server": server, "token": token}
     if not configured() or "--new" in args:
+        write_conf(server=server)
         values.update(new_channel())
     values.setdefault("images", conf.get("images", True))
     write_conf(**values)
@@ -826,7 +843,7 @@ def project():
         return json.loads(raw) if raw.strip() else None
 
     if action == "list":
-        projects = answer(*http("GET", f"{base}/v1/tossling/projects", conf["token"]))
+        projects = answer(*api("GET", base, "projects", conf["token"]))
         if not projects:
             print(t("Проектов пока нет: tossling project add <канал>", "No projects yet: tossling project add <channel>"))
         for p in projects:
@@ -834,7 +851,7 @@ def project():
             print(f"{p['topic']:<24} {p.get('name', ''):<24} {paint(who, '2')}")
     elif action == "add" and rest:
         body = json.dumps({"topic": rest[0], "name": " ".join(rest[1:]), "publisher": publisher}).encode()
-        p = answer(*http("POST", f"{base}/v1/tossling/projects", conf["token"], body, {"Content-Type": "application/json"}))
+        p = answer(*api("POST", base, "projects", conf["token"], body, {"Content-Type": "application/json"}))
         print(t(f"{OK} проект «{p['name']}» в канале {p['topic']}, отправитель {p.get('publisher', '')}",
                 f"{OK} project «{p['name']}» on channel {p['topic']}, publisher {p.get('publisher', '')}"))
         if p.get("token"):
@@ -844,7 +861,7 @@ def project():
         else:
             print(t("Отправитель пишет сюда своим прежним токеном.", "The publisher writes here with the token it already has."))
     elif action == "remove" and len(rest) == 1:
-        answer(*http("DELETE", f"{base}/v1/tossling/projects/{rest[0]}", conf["token"]))
+        answer(*api("DELETE", base, f"projects/{rest[0]}", conf["token"]))
         print(t(f"{OK} проект {rest[0]} удалён: писать в него больше никто не может.",
                 f"{OK} project {rest[0]} removed: nobody can publish there any more."))
     else:

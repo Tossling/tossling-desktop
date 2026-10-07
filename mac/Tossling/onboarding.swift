@@ -20,8 +20,8 @@ func normalizedServer(_ text: String) -> String {
     return value
 }
 
-func checkServer(_ server: String, token: String, done: @escaping (String?) -> Void) {
-    guard let url = URL(string: server + "/v1/account") else { return done(L("Не понял адрес сервера", "Could not read the server address")) }
+func checkServer(_ server: String, token: String, done: @escaping (String?, String) -> Void) {
+    guard let url = URL(string: server + "/v1/account") else { return done(L("Не понял адрес сервера", "Could not read the server address"), "") }
     var request = URLRequest(url: url, timeoutInterval: 15)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     URLSession.shared.dataTask(with: request) { data, response, error in
@@ -33,7 +33,10 @@ func checkServer(_ server: String, token: String, done: @escaping (String?) -> V
         case 0: problem = L("Нет связи с сервером", "No connection to the server") + (error.map { ": \($0.localizedDescription)" } ?? "")
         default: problem = L("Сервер ответил HTTP \(code)", "The server answered HTTP \(code)")
         }
-        DispatchQueue.main.async { done(problem) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let prefix = problem == nil ? channelPrefix(server) : ""
+            DispatchQueue.main.async { done(problem, prefix) }
+        }
     }.resume()
 }
 
@@ -52,10 +55,10 @@ func writeNewConfig(_ values: [String: Any], to path: String) -> Bool {
     return rename(tmp, path) == 0
 }
 
-func newRoom(server: String, token: String, deviceID: String) -> [String: Any] {
+func newRoom(server: String, token: String, deviceID: String, prefix: String) -> [String: Any] {
     var key = Data(count: 32)
     _ = key.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
-    return ["server": server, "token": token, "room": "tossy-" + hex(12), "key": key.base64EncodedString(),
+    return ["server": server, "token": token, "room": prefix + hex(12), "key": key.base64EncodedString(),
             "device_id": deviceID, "owner": deviceID, "legacy_to_mac": "", "legacy_to_phone": "", "images": true]
 }
 
@@ -127,13 +130,13 @@ final class OnboardingModel: ObservableObject {
         problem = ""
         status = L("Проверяю сервер…", "Checking the server…")
         step = .working
-        checkServer(address, token: key) { [self] trouble in
+        checkServer(address, token: key) { [self] trouble, prefix in
             if let trouble = trouble {
                 problem = trouble
                 step = .server
                 return
             }
-            guard writeNewConfig(newRoom(server: address, token: key, deviceID: existingDeviceID(configPath)), to: configPath) else {
+            guard writeNewConfig(newRoom(server: address, token: key, deviceID: existingDeviceID(configPath), prefix: prefix), to: configPath) else {
                 problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")
                 step = .server
                 return

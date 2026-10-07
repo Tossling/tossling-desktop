@@ -57,7 +57,7 @@ final class Alerts: NSObject, URLSessionDataDelegate {
                   let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
             let server = conf.server
             let list = (json["subscriptions"] as? [[String: Any]] ?? []).compactMap { item -> ProjectChannel? in
-                guard let topic = item["topic"] as? String, !topic.hasPrefix("tossy-"),
+                guard let topic = item["topic"] as? String, !isRoomTopic(topic),
                       (item["base_url"] as? String ?? server).trimmingCharacters(in: CharacterSet(charactersIn: "/")) == server else { return nil }
                 let name = (item["display_name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? topic
                 return ProjectChannel(topic: topic, name: name)
