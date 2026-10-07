@@ -56,7 +56,7 @@ def main():
         sys.exit("Release notes are needed: make publish NOTES=<file>.")
 
     run("git", "-C", ROOT, "push", "-q", "origin", "HEAD")
-    run("git", "-C", ROOT, "tag", tag)
+    run("git", "-C", ROOT, "tag", "-a", tag, "-m", f"Tossling Desktop {v}")
     run("git", "-C", ROOT, "push", "-q", "origin", tag)
     with tempfile.TemporaryDirectory() as tmp:
         stable = os.path.join(tmp, "Tossling.dmg")
