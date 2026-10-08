@@ -48,6 +48,7 @@ object Autostart {
                 "Type=Application",
                 "Name=Tossling",
                 "Exec=\"${Platform.executable}\"",
+                "TryExec=${Platform.executable}",
                 "X-GNOME-Autostart-enabled=true",
             ).joinToString(separator = "\n", postfix = "\n")
             if (file.isFile && file.readText() == entry) return
@@ -78,24 +79,50 @@ object ExplorerMenu {
     private fun applyLinux(exe: String) {
         val label = L("Отправить через Tossling", "Send via Tossling")
         val data = Platform.xdgData
+        val scripts = listOf(File(data, "nautilus/scripts"), File(Platform.xdgConfig, "caja/scripts"))
+        val helper = File(data, "tossling/send")
+        val files = LinuxFiles(
+            autostart = File(Platform.xdgConfig, "autostart/tossling.desktop"),
+            scripts = scripts,
+            entries = listOf(File(data, "nemo/actions/tossling.nemo_action"), File(data, "kio/servicemenus/tossling.desktop"), File(data, "kservices5/ServiceMenus/tossling.desktop"), helper),
+            thunar = File(Platform.xdgConfig, "Thunar/uca.xml"),
+        )
         runCatching {
-            File(data, "nautilus/scripts").listFiles { file -> file.isFile && file.name != label && file.readText().contains("--send") && file.readText().contains(exe) }?.forEach { it.delete() }
-            write(File(data, "nautilus/scripts/$label"), "#!/bin/sh\nexec \"$exe\" --send \"$@\"\n", executable = true)
+            val script = sendScript(exe = exe, files = files)
+            write(helper, script, executable = true)
+            scripts.forEach { dir ->
+                dir.listFiles { file -> file.isFile && file.name != label && file.readText().let { it.contains(SCRIPT_MARK) || (it.contains("--send") && it.contains(exe)) } }?.forEach { it.delete() }
+                write(File(dir, label), script, executable = true)
+            }
             write(
                 File(data, "nemo/actions/tossling.nemo_action"),
-                "[Nemo Action]\nName=$label\nExec=\"$exe\" --send %F\nIcon-Name=document-send\nSelection=notnone\nExtensions=any;\n",
+                "[Nemo Action]\nName=$label\nExec=\"$exe\" --send %F\nIcon-Name=document-send\nSelection=notnone\nExtensions=any;\nDependencies=$exe;\n",
             )
-            val service = "[Desktop Entry]\nType=Service\nMimeType=application/octet-stream;inode/directory;\nActions=send\nX-KDE-ServiceTypes=KonqPopupMenu/Plugin\n\n" +
+            val service = "[Desktop Entry]\nType=Service\nMimeType=application/octet-stream;inode/directory;\nActions=send\nTryExec=$exe\nX-KDE-ServiceTypes=KonqPopupMenu/Plugin\n\n" +
                 "[Desktop Action send]\nName=$label\nIcon=document-send\nExec=\"$exe\" --send %F\n"
             write(File(data, "kio/servicemenus/tossling.desktop"), service, executable = true)
             write(File(data, "kservices5/ServiceMenus/tossling.desktop"), service)
-            File(Platform.xdgConfig, "caja/scripts").listFiles { file -> file.isFile && file.name != label && file.readText().contains("--send") && file.readText().contains(exe) }?.forEach { it.delete() }
-            write(File(Platform.xdgConfig, "caja/scripts/$label"), "#!/bin/sh\nexec \"$exe\" --send \"$@\"\n", executable = true)
-            thunarAction(exe = exe, label = label)
+            thunarAction(command = helper.absolutePath, label = label)
         }.onFailure { Log.write("could not add Tossling to the file manager menu: ${it.message}") }
     }
 
-    private fun thunarAction(exe: String, label: String) {
+    class LinuxFiles(val autostart: File, val scripts: List<File>, val entries: List<File>, val thunar: File)
+
+    fun sendScript(exe: String, files: LinuxFiles): String {
+        fun quote(path: String) = "'" + path.replace("'", "'\\''") + "'"
+        return listOf(
+            "#!/bin/sh",
+            "# $SCRIPT_MARK",
+            "if [ -x ${quote(exe)} ]; then exec ${quote(exe)} --send \"$@\"; fi",
+            "grep -qsF ${quote(exe)} ${quote(files.autostart.path)} && rm -f ${quote(files.autostart.path)}",
+            files.scripts.joinToString(separator = "\n") { dir -> "grep -lsF $SCRIPT_MARK ${quote(dir.path)}/* | while IFS= read -r f; do rm -f \"\$f\"; done" },
+            "rm -f " + files.entries.joinToString(separator = " ") { quote(it.path) },
+            "uca=${quote(files.thunar.path)}",
+            "if [ -f \"\$uca\" ]; then awk '/<action>/ { block = \"\"; inside = 1 } inside { block = block \$0 \"\\n\"; if (/<\\/action>/) { inside = 0; if (block !~ /$THUNAR_ID/) printf \"%s\", block } next } { print }' \"\$uca\" > \"\$uca.tmp\" && mv \"\$uca.tmp\" \"\$uca\"; fi",
+        ).joinToString(separator = "\n", postfix = "\n")
+    }
+
+    private fun thunarAction(command: String, label: String) {
         val file = File(Platform.xdgConfig, "Thunar/uca.xml")
         if (!file.parentFile.isDirectory) return
         val action = listOf(
@@ -103,7 +130,7 @@ object ExplorerMenu {
             "\t<icon>document-send</icon>",
             "\t<name>$label</name>",
             "\t<unique-id>$THUNAR_ID</unique-id>",
-            "\t<command>&quot;$exe&quot; --send %F</command>",
+            "\t<command>&quot;$command&quot; %F</command>",
             "\t<description>$label</description>",
             "\t<patterns>*</patterns>",
             "\t<directories/>",
@@ -126,6 +153,7 @@ object ExplorerMenu {
     }
 
     private const val THUNAR_ID = "tossling-send"
+    private const val SCRIPT_MARK = "tossling-send-helper"
 
     private fun write(file: File, text: String, executable: Boolean = false) {
         if (!file.isFile || file.readText() != text) {

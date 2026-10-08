@@ -76,4 +76,12 @@ class UpdatesTest {
         val names = ZipFile(zip).use { file -> file.entries().toList().map { it.name }.sorted() }
         assertEquals(listOf("Photos/", "Photos/a.txt", "Photos/trip/", "Photos/trip/b.txt"), names)
     }
+
+    @Test
+    fun eachPlatformReadsItsOwnFeed() {
+        assertEquals("https://monoroh.com/tossling/windows.json", Updates.feedUrl(os = Os.WINDOWS, arm = false))
+        assertEquals("https://monoroh.com/tossling/windows-arm64.json", Updates.feedUrl(os = Os.WINDOWS, arm = true))
+        assertEquals("https://monoroh.com/tossling/linux-amd64.json", Updates.feedUrl(os = Os.LINUX, arm = false))
+        assertEquals("https://monoroh.com/tossling/linux-arm64.json", Updates.feedUrl(os = Os.LINUX, arm = true))
+    }
 }

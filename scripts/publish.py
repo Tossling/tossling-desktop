@@ -19,6 +19,8 @@ TAP = ("Tossling/homebrew-tap", "Casks/tossling.rb")
 FEED = ("kopylovis/landing-web", "public/tossling/appcast.xml")
 WINDOWS_FEED = ("kopylovis/landing-web", "public/tossling/windows.json")
 WINDOWS_ARM_FEED = ("kopylovis/landing-web", "public/tossling/windows-arm64.json")
+LINUX_FEED = ("kopylovis/landing-web", "public/tossling/linux-amd64.json")
+LINUX_ARM_FEED = ("kopylovis/landing-web", "public/tossling/linux-arm64.json")
 
 
 def run(*args, capture=True):
@@ -56,10 +58,13 @@ def artifact(run_id, name, directory):
 
 def linux(v, tag, run_id):
     with tempfile.TemporaryDirectory() as tmp:
-        names = (f"tossling_{v}_amd64.deb", f"Tossling-{v}-linux-x64.tar.gz", f"tossling_{v}_arm64.deb", f"Tossling-{v}-linux-arm64.tar.gz")
+        names = (f"Tossling-{v}-linux-x64.tar.gz", f"Tossling-{v}-linux-arm64.tar.gz")
         files = [artifact(run_id, name, tmp) for name in names]
         run("gh", "release", "upload", tag, *files, "-R", REPO, "--clobber")
-    print("The Linux .deb and tar.gz for x86-64 and arm64 added to", tag)
+    print("The Linux tar.gz for x86-64 and arm64 added to", tag)
+    for name, target in ((f"tossling_{v}_amd64.deb", LINUX_FEED), (f"tossling_{v}_arm64.deb", LINUX_ARM_FEED)):
+        installer(v, tag, run_id, name, target)
+    print("Linux feeds updated: Tossling installed from the .deb will offer the update")
 
 
 def installer(v, tag, run_id, name, target):
@@ -68,7 +73,7 @@ def installer(v, tag, run_id, name, target):
         signed = run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, msi)
         match = re.search(r'edSignature="([^"]+)"', signed)
         if not match:
-            sys.exit("sign_update did not return a signature.")
+            sys.exit(f"sign_update did not sign {name}.")
         with open(msi, "rb") as f:
             digest = hashlib.sha256(f.read()).hexdigest()
         manifest = os.path.join(tmp, "manifest.txt")
@@ -79,7 +84,7 @@ def installer(v, tag, run_id, name, target):
             sys.exit("sign_update did not sign the manifest.")
         run("gh", "release", "upload", tag, msi, "-R", REPO, "--clobber")
         print(f"{name} added to {tag}")
-        feed = os.path.join(tmp, "windows.json")
+        feed = os.path.join(tmp, "feed.json")
         with open(feed, "w") as f:
             json.dump({
                 "version": v,
@@ -90,7 +95,7 @@ def installer(v, tag, run_id, name, target):
                 "manifest_signature": signed_manifest.group(1),
                 "notes": NOTES_URL.format(version=v),
             }, f, indent=2)
-        put(*target, feed, f"Tossling {v} for Windows ({os.path.basename(target[1])})")
+        put(*target, feed, f"Tossling {v}: {os.path.basename(target[1])}")
 
 
 def windows(v, tag):

@@ -185,7 +185,11 @@ private class TrayMenu(
         }
         item(text = status, enabled = false)
         updates.available.value?.let { release ->
-            item(text = L("Установить версию ${release.version}", "Install Version ${release.version}"), enabled = !updates.busy.value) { updates.install(release) }
+            if (updates.installsItself) {
+                item(text = L("Установить версию ${release.version}", "Install Version ${release.version}"), enabled = !updates.busy.value) { updates.install(release) }
+            } else {
+                item(text = L("Скачать версию ${release.version}", "Download Version ${release.version}")) { openLink(release.notes) }
+            }
         }
         separator()
         val items = history.items.value

@@ -228,8 +228,11 @@ the AppIndicator extension, which Ubuntu has built in. Tossling adds «Send via 
 Nemo, Dolphin and Thunar, starts at login through `~/.config/autostart/tossling.desktop`, and on X11 Super+Shift+C
 (Ctrl+Alt+Shift+C when it is taken) sends the selected text. Wayland has no global shortcuts for apps: bind
 `/opt/tossling/bin/Tossling --send-clipboard` to a key in the system settings. On Wayland Tossling runs through XWayland
-and still sees what you copy (checked on Ubuntu 20.04 with GNOME 3.36). There are no automatic updates on Linux yet:
-install the new `.deb` from Releases over the old one.
+and still sees what you copy (checked on Ubuntu 20.04 with GNOME 3.36). Installed from the `.deb`, Tossling offers new
+versions in the menu: it downloads the package, checks the same Ed25519 signature as on Windows and installs it through
+`pkexec`, which asks for your password. The `tar.gz` build only shows a link to the release. After `apt remove` the
+autostart entry and the Nemo and Dolphin items no longer show up; the Nautilus, Caja and Thunar items stay until the
+first click, which deletes all of them.
 
 The protocol module comes from tossling-mobile, a git submodule in `jvm/external/tossling-mobile`:
 
@@ -253,7 +256,7 @@ workflow on a version tag, and every signing request is approved by hand.
 
 Privacy: Tossling sends data only where you point it. The clipboard goes, encrypted on the device, to the ntfy server of
 your room, which you choose when you set it up. The app also checks for updates: the Mac at the Sparkle appcast, Windows
-at `https://monoroh.com/tossling/windows.json`, downloading new versions from GitHub Releases. Nothing else is sent, there
+and Linux at feeds like `https://monoroh.com/tossling/windows.json`, downloading new versions from GitHub Releases. Nothing else is sent, there
 is no analytics or telemetry.
 
 ## Reporting a vulnerability
