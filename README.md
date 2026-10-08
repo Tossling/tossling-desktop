@@ -214,9 +214,10 @@ login (Settings → Start with Windows), the «Send via Tossling» entry in `HKC
 the app, the autostart and the Explorer entry; the room and history stay in `%APPDATA%\Tossling` until you delete them.
 
 `Tossling-<version>.msi` in [Releases](https://github.com/tossling/tossling-desktop/releases) installs for the current
-user, no administrator rights needed. Until the installers are signed (see [Code signing policy](#code-signing-policy)),
-Windows asks to confirm the first start (More info → Run anyway). Every push builds the MSI in the «Windows and Linux»
-workflow; `make publish` adds it to the release and updates the Windows feed.
+user, no administrator rights needed; on Windows 11 for ARM take `Tossling-<version>-arm64.msi`, it runs natively
+without x64 emulation. Until the installers are signed (see [Code signing policy](#code-signing-policy)),
+Windows asks to confirm the first start (More info → Run anyway). Every push builds both MSIs in the «Windows and Linux»
+workflow; `make publish` adds them to the release and updates the Windows feeds.
 
 On Linux `tossling_<version>_amd64.deb` (or `_arm64.deb` for ARM) installs into `/opt/tossling` with an entry in the
 applications menu (Ubuntu 20.04 or newer, Debian, Mint, Pop!_OS: `sudo apt install ./tossling_<version>_amd64.deb`), and
