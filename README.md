@@ -5,7 +5,7 @@
 <h1 align="center">Tossling Desktop</h1>
 
 <p align="center">
-  One clipboard for your Macs and Android phone, through your own server.<br>
+  One clipboard for your computers and Android phone, through your own server.<br>
   Copy on one device, paste on another a second later. Everything is encrypted on the devices.
 </p>
 
@@ -13,7 +13,7 @@
   <a href="https://github.com/tossling/tossling-desktop/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/tossling/tossling-desktop?color=3067B8"></a>
   <img alt="macOS 13 or newer" src="https://img.shields.io/badge/macOS-13%2B-3067B8">
   <img alt="Windows 10 or newer" src="https://img.shields.io/badge/Windows-10%2B-3067B8">
-  <img alt="Linux in progress" src="https://img.shields.io/badge/Linux-in%20progress-8A8F98">
+  <img alt="Linux x64 and arm64" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-3067B8">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-3067B8"></a>
 </p>
 
@@ -27,7 +27,7 @@ Copy on one computer and paste on another or on the phone; files up to 500 MB go
 relays ciphertext.
 
 This repository is the desktop side: for macOS a menu bar helper (`Tossling.app`), the `tossling` command and a
-Finder extension, for Windows a tray app ([Windows](#windows-and-linux)). **Linux is in progress** and will live here too.
+Finder extension, for Windows and Linux a tray app ([Windows and Linux](#windows-and-linux)).
 The phone app lives in [tossling/tossling-mobile](https://github.com/tossling/tossling-mobile), the server in
 [tossling/tossling-server](https://github.com/tossling/tossling-server).
 
@@ -45,14 +45,16 @@ Menus and messages follow the system language (English or Russian); `tossling la
 
 ## Requirements
 
-- macOS 13 or newer.
+- macOS 13 or newer, Windows 10 or newer (x64 or ARM), or Linux on x64 or arm64.
 - A [Tossling Server](https://github.com/tossling/tossling-server) (one Docker container) and its address, for example
   `https://tossling.example.com`. Its setup page shows the address and the token.
 
 ## Install
 
-Download `Tossling-<version>.dmg` from [Releases](https://github.com/tossling/tossling-desktop/releases), drag `Tossling.app` to
-Applications and open it (or `brew install --cask tossling/tap/tossling`). The app is signed and notarized. On the first
+For Windows and Linux see [Windows and Linux](#windows-and-linux).
+
+On a Mac download `Tossling-<version>.dmg` from [Releases](https://github.com/tossling/tossling-desktop/releases), drag
+`Tossling.app` to Applications and open it (or `brew install --cask tossling/tap/tossling`). The app is signed and notarized. On the first
 start it asks for the server address and the token, or for an invite code from another Mac, then shows a QR code for
 the phone. It lives in the menu bar afterwards.
 
@@ -200,6 +202,8 @@ tests against; `make selftest` checks the Mac code with it. CLI tests run on a t
 
 <p align="center">
   <img src="docs/images/windows-menu.png" width="440" alt="The Tossling tray menu on Windows: recent items, devices online and the room actions">
+  &nbsp;&nbsp;
+  <img src="docs/images/linux-menu.png" width="199" alt="The Tossling menu in the Ubuntu panel: the same items and devices">
 </p>
 
 `jvm/` is the app for Windows and Linux: Kotlin with Compose Desktop, sitting in the tray. It joins a room with
@@ -247,12 +251,11 @@ To work on the protocol and the app together, put `tossling.mobile=../../tosslin
 
 ## Code signing policy
 
-Windows releases are signed with free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org). The installer is built from this repository by the «Windows and Linux»
-workflow on a version tag, and every signing request is approved by hand.
+The Windows installers are not code-signed yet, so Windows asks to confirm the first start. They are built from this
+repository by the «Windows and Linux» workflow on a version tag. Updates on Windows and Linux are installed only after
+their Ed25519 signature checks out against the key built into the app.
 
-- Committers and reviewers: [kopylovis](https://github.com/kopylovis)
-- Approvers: [kopylovis](https://github.com/kopylovis)
+Committers, reviewers and release approvers: [kopylovis](https://github.com/kopylovis).
 
 Privacy: Tossling sends data only where you point it. The clipboard goes, encrypted on the device, to the ntfy server of
 your room, which you choose when you set it up. The app also checks for updates: the Mac at the Sparkle appcast, Windows
