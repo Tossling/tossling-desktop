@@ -301,15 +301,23 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
             if (node.children.isNotEmpty()) append(node.children.joinToString(prefix = "[", postfix = "]", transform = ::signatureOf))
         }
 
-        private fun label(text: String) = text.replace("_", "__")
+        private fun label(text: String) = menuLabel(text = text, gnome = GNOME)
     }
 
-    private companion object {
-        const val ITEM_PATH = "/StatusNotifierItem"
-        const val MENU_PATH = "/MenuBar"
-        const val WATCHER = "org.kde.StatusNotifierWatcher"
-        const val NOTIFICATIONS = "org.freedesktop.Notifications"
-        const val REFRESH_MS = 1_500L
-        val ICON_SIZES = listOf(16, 22, 24, 32, 48)
+    companion object {
+        private val GNOME = System.getenv("XDG_CURRENT_DESKTOP").orEmpty().split(":").any { it.equals("GNOME", ignoreCase = true) }
+
+        fun menuLabel(text: String, gnome: Boolean): String {
+            if (!gnome) return text.replace("_", "__")
+            val mnemonic = Regex("_[^_]").find(text) ?: return text
+            return text.substring(0, mnemonic.range.first) + "_" + text.substring(mnemonic.range.first)
+        }
+
+        private const val ITEM_PATH = "/StatusNotifierItem"
+        private const val MENU_PATH = "/MenuBar"
+        private const val WATCHER = "org.kde.StatusNotifierWatcher"
+        private const val NOTIFICATIONS = "org.freedesktop.Notifications"
+        private const val REFRESH_MS = 1_500L
+        private val ICON_SIZES = listOf(16, 22, 24, 32, 48)
     }
 }
