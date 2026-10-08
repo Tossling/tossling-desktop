@@ -13,6 +13,8 @@ import com.kopylovis.tossling.protocol.crypto.ClipCipher
 import com.kopylovis.tossling.protocol.crypto.DeviceIdentity
 import com.kopylovis.tossling.protocol.crypto.RoomKeys
 import com.kopylovis.tossling.protocol.crypto.RoomSecret
+import com.kopylovis.tossling.protocol.crypto.openStream
+import com.kopylovis.tossling.protocol.crypto.sealStream
 import com.kopylovis.tossling.protocol.network.NtfyClient
 import com.kopylovis.tossling.protocol.network.NtfyEvent
 import com.kopylovis.tossling.protocol.network.NtfyException
