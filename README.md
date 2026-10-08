@@ -14,6 +14,7 @@
   <img alt="macOS 13 or newer" src="https://img.shields.io/badge/macOS-13%2B-3067B8">
   <img alt="Windows 10 or newer" src="https://img.shields.io/badge/Windows-10%2B-3067B8">
   <img alt="Linux x64 and arm64" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-3067B8">
+  <img alt="iOS in progress" src="https://img.shields.io/badge/iOS-in%20progress-8A8F98">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-3067B8"></a>
 </p>
 
@@ -27,9 +28,9 @@ Copy on one computer and paste on another or on the phone. Files up to 500 MB go
 relays ciphertext.
 
 This repository holds the desktop apps. On macOS it is a menu bar helper (`Tossling.app`) with the `tossling` command and
-a Finder extension. On Windows and Linux it is a tray app, see [Windows and Linux](#windows-and-linux). The phone app
+a Finder extension. On Windows and Linux it is a tray app, see [Windows and Linux](#windows-and-linux). The Android app
 lives in [tossling/tossling-mobile](https://github.com/tossling/tossling-mobile) and the server in
-[tossling/tossling-server](https://github.com/tossling/tossling-server).
+[tossling/tossling-server](https://github.com/tossling/tossling-server). An iOS app is in progress.
 
 Menus and messages follow the system language, English or Russian. `tossling language en|ru|auto` overrides it.
 
