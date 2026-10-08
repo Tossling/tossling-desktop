@@ -57,7 +57,7 @@ For Windows and Linux see [Windows and Linux](#windows-and-linux).
 On a Mac download `Tossling-<version>.dmg` from [Releases](https://github.com/tossling/tossling-desktop/releases), drag
 `Tossling.app` to Applications and open it. Homebrew works too, `brew install --cask tossling/tap/tossling`. The app is
 signed and notarized. On the first start it asks for the server address and the token, or for an invite code from
-another Mac, and then shows a QR code for the phone. After that it lives in the menu bar.
+another computer, and then shows a QR code for the phone. After that it lives in the menu bar.
 
 Since 0.3 updates come by themselves. At start and once a day the app looks for a new version through Sparkle and
 offers it in the menu, and "Check for Updates…" asks right away. Updates are signed with Tossling's update key and the
@@ -93,11 +93,12 @@ The token can also come from the environment, as in `TOSSLING_TOKEN=tk_… tossl
 Install Tossling on the phone, tap "Pair with a Mac" and scan the QR code that `tossling setup` (or later
 `tossling pair`) shows. The QR code carries the room key and the token, so do not share it or take a screenshot of it.
 
-## Another Mac
+## Another computer
 
-On a Mac that is already in the room run `tossling invite`, or choose Devices, then Invite Another Mac in the menu bar.
-It prints something like `tossling join tossling.example.com/ABCD-EFGH`. Run that on the new Mac within 10 minutes. The
-invite is never stored on the server. The first Mac keeps sending it uncached while it waits, and the room key inside is
+On a computer that is already in the room choose Devices, then Invite a Computer in the menu, or run `tossling invite`
+on a Mac. It shows something like `tossling join tossling.example.com/ABCD-EFGH`. Within 10 minutes run that on the new
+Mac, or on Windows and Linux choose Join Another Room and paste `tossling.example.com/ABCD-EFGH`. The invite is never
+stored on the server. The inviting computer keeps sending it uncached while it waits, and the room key inside is
 encrypted with the code (PBKDF2 and AES-GCM).
 
 ## On a completely different Mac
@@ -105,8 +106,8 @@ encrypted with the code (PBKDF2 and AES-GCM).
 A short checklist for a Mac that has never seen Tossling.
 
 1. Install `Tossling.app` from Releases or with `brew install --cask tossling/tap/tossling` and open it.
-2. To share the room you already have, run `tossling invite` on a Mac in it (or use Devices, then Invite Another Mac in
-   the menu bar). In the first-run window choose "Join another Mac's room" and enter that code. For a new room choose
+2. To share the room you already have, run `tossling invite` on a Mac in it (or use Devices, then Invite a Computer in
+   the menu). In the first-run window choose "Join another computer's room" and enter that code. For a new room choose
    "Connect my server" and enter the address and the token from the server's setup page. The server panel can issue a
    new setup link.
 3. Allow Tossling in Login Items when macOS asks, and allow notifications.
@@ -177,7 +178,7 @@ and Thunar items stay until the first click, which deletes all of them.
 | `tossling images on\|off` | sends images too, or text only |
 | `tossling rename <name>` | renames this Mac for the whole room. `tossling rename <device> <name>` names another device on this Mac only |
 | `tossling pair [--new]` | a QR code for a phone. `--new` starts a new room |
-| `tossling invite` / `tossling join <code>` | adds another Mac |
+| `tossling invite` / `tossling join <code>` | adds another computer |
 | `tossling log` | what was sent and why something was skipped |
 | `tossling on` / `off` / `remove` | starts, stops, or removes the helper and its settings |
 | `tossling project [list]` | projects of the server and their publishers |

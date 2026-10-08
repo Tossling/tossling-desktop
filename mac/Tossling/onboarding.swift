@@ -155,7 +155,7 @@ final class OnboardingModel: ObservableObject {
         let invite = String(text[text.index(after: slash)...])
         let out = NSTemporaryDirectory() + "tossling-join-\(getpid()).json"
         problem = ""
-        status = L("Жду ответа от другого Mac…", "Waiting for the other Mac…")
+        status = L("Жду ответа от другого компьютера…", "Waiting for the other computer…")
         step = .working
         runSelf(["--config", "/dev/null", "--join", address, invite, "--out", out, "--id", existingDeviceID(configPath), "--name", ""]) { [self] code, output in
             defer { try? FileManager.default.removeItem(atPath: out) }
@@ -235,7 +235,7 @@ struct OnboardingView: View {
                 Button(L("Подключить свой сервер", "Connect my server")) { model.step = .server }
                     .controlSize(.large)
                     .modifier(GlassButton(prominent: true))
-                Button(L("Войти в комнату другого Mac", "Join another Mac's room")) { model.step = .join }
+                Button(L("Войти в комнату другого компьютера", "Join another computer's room")) { model.step = .join }
                     .controlSize(.large)
                     .modifier(GlassButton(prominent: false))
                 Text(L("Сервер — Tossling Server: один Docker-контейнер, на его странице настройки есть адрес и токен.", "The server is Tossling Server, one Docker container; its setup page shows the address and the token."))
@@ -255,7 +255,7 @@ struct OnboardingView: View {
                 }
                 .controlSize(.large)
             case .join:
-                Text(L("На Mac, который уже в комнате: строка меню Tossling → Устройства → Пригласить ещё один Mac. Вставь сюда код.", "On a Mac already in the room: Tossling in the menu bar → Devices → Invite Another Mac. Paste the code here."))
+                Text(L("На компьютере, который уже в комнате: меню Tossling → Устройства → Пригласить компьютер. Вставь сюда код.", "On a computer already in the room: the Tossling menu → Devices → Invite a Computer. Paste the code here."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

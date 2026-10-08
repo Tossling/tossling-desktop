@@ -32,8 +32,8 @@ if has_flag(args, "-h", "--help") or (args and args[0] not in ACTIONS and not (a
     print(t("tossling status             состояние: работает ли, связь с сервером, устройства, что передано", "tossling status             is it running, the server connection, devices, what was sent"))
     print(t("tossling setup [<сервер>]   подключить свой сервер и телефон с приложением Tossling (токен: TOSSLING_TOKEN или ввод)", "tossling setup [<server>]   connect your server and a phone with the Tossling app (token: TOSSLING_TOKEN or typed)"))
     print(t("tossling pair [--new]       показать QR для телефона; --new — новый ключ, все устройства подключать заново", "tossling pair [--new]       QR code for a phone; --new: a new key, every device has to pair again"))
-    print(t("tossling invite             код для второго Mac (10 минут, один раз)", "tossling invite             a code for another Mac (10 minutes, once)"))
-    print(t("tossling join <код>         подключить этот Mac к комнате другого: tossling join ntfy.example.com/ABCD-EFGH", "tossling join <code>        join the room of another Mac: tossling join tossling.example.com/ABCD-EFGH"))
+    print(t("tossling invite             код для другого компьютера (10 минут, один раз)", "tossling invite             a code for another computer (10 minutes, once)"))
+    print(t("tossling join <код>         войти в комнату другого компьютера: tossling join tossling.example.com/ABCD-EFGH", "tossling join <code>        join the room of another computer: tossling join tossling.example.com/ABCD-EFGH"))
     print(t("tossling rename             переименовать устройство в комнате (выбор из списка)", "tossling rename             rename a device of the room (pick from a list)"))
     print(t("tossling rename <имя>       новое имя этого Mac — его увидят все в комнате", "tossling rename <name>      a new name for this Mac, seen by everyone in the room"))
     print(t("tossling rename <кто> <имя> как называть другое устройство на этом Mac (пустое имя — вернуть его собственное)", "tossling rename <who> <name> what to call another device on this Mac (empty: its own name again)"))
@@ -98,7 +98,7 @@ def drop_conf(key):
 def not_configured():
     c = read_conf()
     if c.get("server") and c.get("token"):
-        return (t("Этот Mac не в комнате: его отключили с другого устройства или настройки сброшены.\n" "Вернуться: tossling setup --new — новая комната и QR для телефона,\n" "или tossling join <код> — в комнату другого Mac (код даёт tossling invite на нём).", "This Mac is not in a room: another device disconnected it or the settings were reset.\n" "Come back with tossling setup --new (a new room and a QR code for the phone)\n" "or tossling join <code> (the room of another Mac; tossling invite there gives the code)."))
+        return (t("Этот Mac не в комнате: его отключили с другого устройства или настройки сброшены.\n" "Вернуться: tossling setup --new — новая комната и QR для телефона,\n" "или tossling join <код> — в комнату другого компьютера (код дает tossling invite или Устройства → Пригласить компьютер).", "This Mac is not in a room: another device disconnected it or the settings were reset.\n" "Come back with tossling setup --new (a new room and a QR code for the phone)\n" "or tossling join <code> (the room of another computer; tossling invite or Devices → Invite a Computer there gives the code)."))
     return t("Сначала tossling setup <сервер>", "Run tossling setup <server> first")
 
 
@@ -695,7 +695,7 @@ def status():
     print(t(f"  этот Mac: {my_name(conf)}", f"  this Mac: {my_name(conf)}"))
     others = room_devices(conf, s)
     if others:
-        names = [t(f"{d['title']} ({own(d)}{'Mac' if d['mac'] else 'телефон'}, {ago(d['seen'])})", f"{d['title']} ({own(d)}{'Mac' if d['mac'] else 'phone'}, {ago(d['seen'])})") for d in others]
+        names = [t(f"{d['title']} ({own(d)}{d['kind'] or 'телефон'}, {ago(d['seen'])})", f"{d['title']} ({own(d)}{d['kind'] or 'phone'}, {ago(d['seen'])})") for d in others]
         print(t(f"  устройства в комнате: {', '.join(names)}", f"  devices in the room: {', '.join(names)}"))
     else:
         print(t(f"  телефон: {s.get('phone') or 'ещё не подключался — tossling pair'}", f"  phone: {s.get('phone') or 'not paired yet: tossling pair'}"))
@@ -730,9 +730,12 @@ def room_devices(conf, state):
         if key == me:
             continue
         name = m.get("name", "?")
-        out.append({"id": key, "name": name, "title": aliases.get(key) or name, "mac": m.get("src") == "mac",
+        out.append({"id": key, "name": name, "title": aliases.get(key) or name, "kind": COMPUTERS.get(m.get("src", "")),
                     "seen": m.get("seen") or 0})
     return sorted(out, key=lambda d: -d["seen"])
+
+
+COMPUTERS = {"mac": "Mac", "windows": "Windows", "linux": "Linux"}
 
 
 def own(device):
@@ -791,7 +794,7 @@ def rename():
     from menu import pick
     rows = [(t(f"{my_name(conf)} этот mac", f"{my_name(conf)} this mac"), t(f"{my_name(conf)}  {paint('этот Mac · имя видят все', '2')}", f"{my_name(conf)}  {paint('this Mac · everyone sees the name', '2')}"))]
     for d in others:
-        note = "Mac" if d["mac"] else t("телефон", "phone")
+        note = d["kind"] or t("телефон", "phone")
         if d["title"] != d["name"]:
             note += t(f" · сам называет себя «{d['name']}»", f" · calls itself «{d['name']}»")
         rows.append((f"{d['title']} {d['name']}", t(f"{d['title']}  {paint(note + ' · имя только на этом Mac', '2')}", f"{d['title']}  {paint(note + ' · the name is only on this Mac', '2')}")))
@@ -878,8 +881,8 @@ def show_config():
     print(json.dumps({k: conf[k] for k in ("server", "token", "alert_topics") if k in conf}))
 
 
-MENU = (("status", t("состояние", "status")), ("rename", t("переименовать устройство", "rename a device")), ("invite", t("код для второго Mac", "a code for another Mac")),
-        ("join", t("подключить этот Mac к комнате другого", "join the room of another Mac")), ("pair", t("показать QR для телефона", "QR code for a phone")),
+MENU = (("status", t("состояние", "status")), ("rename", t("переименовать устройство", "rename a device")), ("invite", t("код для другого компьютера", "a code for another computer")),
+        ("join", t("войти в комнату другого компьютера", "join the room of another computer")), ("pair", t("показать QR для телефона", "QR code for a phone")),
         ("setup", t("подключить сервер", "connect a server")), ("pause", t("не отправлять 30 минут", "do not send for 30 minutes")), ("resume", t("снова отправлять", "send again")),
         ("auto off", t("отправлять только по горячей клавише", "send only on the hotkey")), ("auto on", t("отправлять сам по ⌘C", "send by itself on ⌘C")), ("log", t("что передано", "what was sent")),
         ("on", t("включить", "start")), ("off", t("выключить", "stop")))
@@ -897,7 +900,7 @@ def menu():
         action = MENU[at][0].split()
         if action == ["join"]:
             try:
-                code = input(t("Код с другого Mac (tossling.example.com/ABCD-EFGH): ", "Code from the other Mac (tossling.example.com/ABCD-EFGH): ")).strip()
+                code = input(t("Код с другого компьютера (tossling.example.com/ABCD-EFGH): ", "Code from the other computer (tossling.example.com/ABCD-EFGH): ")).strip()
             except (KeyboardInterrupt, EOFError):
                 print()
                 continue

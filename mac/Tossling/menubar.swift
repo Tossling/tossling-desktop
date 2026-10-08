@@ -248,9 +248,9 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         self_.attributedTitle = styled(conf.deviceName, conf.isOwner ? L("этот Mac · создатель комнаты", "this Mac · created the room") : L("этот Mac", "this Mac"))
         menu.addItem(self_)
         menu.addItem(.separator())
-        menu.addItem(ActionItem(L("Подключить телефон…", "Pair a Phone…"), symbol: "qrcode") { [weak self] in self?.showQR() })
-        menu.addItem(ActionItem(L("Пригласить ещё один Mac…", "Invite Another Mac…"), symbol: "person.badge.plus") { [weak self] in self?.showInvite() })
-        menu.addItem(ActionItem(L("Войти в комнату другого Mac…", "Join Another Mac's Room…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
+        menu.addItem(ActionItem(L("Подключить телефон…", "Connect a Phone…"), symbol: "qrcode") { [weak self] in self?.showQR() })
+        menu.addItem(ActionItem(L("Пригласить компьютер…", "Invite a Computer…"), symbol: "person.badge.plus") { [weak self] in self?.showInvite() })
+        menu.addItem(ActionItem(L("Войти в другую комнату…", "Join Another Room…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
         return menu
     }
 
@@ -528,8 +528,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             notify(L("Не собрал QR-код", "Could not make the QR code"))
             return
         }
-        _ = showPanel(title: L("Подключить телефон", "Pair a Phone"), image: image,
-                      note: L("В Tossling на телефоне: «Добавить компьютер» → наведи камеру на код. В коде ключ комнаты и токен, не показывай его посторонним.", "In Tossling on the phone: «Add a computer» → point the camera at the code. The code holds the room key and the token, do not show it to others."),
+        _ = showPanel(title: L("Подключить телефон", "Connect a Phone"), image: image,
+                      note: L("Открой Tossling на телефоне и отсканируй этот код. В нем ключ комнаты и токен, не показывай его посторонним.", "Open Tossling on the phone and scan this code. It holds the room key and the token, do not show it to others."),
                       status: L("Жду телефон…", "Waiting for the phone…"))
         waitsForPhone = true
     }
@@ -540,8 +540,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         let code = "\(raw.prefix(4))-\(raw.suffix(4))"
         let host = conf.server.components(separatedBy: "://").last ?? conf.server
         let command = "tossling join \(host)/\(code)"
-        let model = showPanel(title: L("Пригласить Mac", "Invite a Mac"), image: nil,
-                              note: L("Выполни эту команду на втором Mac. Код действует 10 минут, никому его не показывай.", "Run this command on the other Mac. The code works for 10 minutes; do not show it to anyone."),
+        let model = showPanel(title: L("Пригласить компьютер", "Invite a Computer"), image: nil,
+                              note: L("На другом Маке выполни эту команду. На Windows и Linux выбери в Tossling Войти в другую комнату и вставь \(host)/\(code). Код действует 10 минут, никому его не показывай.", "Run this command on another Mac. On Windows and Linux choose Join Another Room in Tossling and paste \(host)/\(code). The code works for 10 minutes, do not show it to anyone."),
                               status: L("Готовлю приглашение…", "Preparing the invite…"))
         var lines = 0
         inviteProcess = helperCommand(["--invite", code], output: { line in
@@ -552,7 +552,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                     return
                 }
                 model.command = command
-                model.status = L("Жду второй Mac…", "Waiting for the other Mac…")
+                model.status = L("Жду другой компьютер…", "Waiting for the other computer…")
             } else if line == "timeout" {
                 model.failed(L("За 10 минут никто не подключился", "Nobody joined within 10 minutes"))
             } else {
@@ -562,9 +562,9 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     private func showJoin() {
-        ask(L("Войти в комнату другого Mac", "Join Another Mac's Room"), value: "",
-            note: L("На Mac, который уже в комнате: Устройства → Пригласить ещё один Mac (или tossling invite). Вставь код вида tossling.example.com/ABCD-EFGH. Этот Mac перейдёт в ту комнату.",
-                    "On a Mac that is already in the room: Devices → Invite Another Mac (or tossling invite). Paste the code like tossling.example.com/ABCD-EFGH. This Mac moves to that room."),
+        ask(L("Войти в другую комнату", "Join Another Room"), value: "",
+            note: L("На компьютере, который уже в комнате: Устройства → Пригласить компьютер (на Маке еще tossling invite). Вставь код вида tossling.example.com/ABCD-EFGH. Этот Mac перейдет в ту комнату.",
+                    "On a computer that is already in the room: Devices → Invite a Computer (on a Mac also tossling invite). Paste the code like tossling.example.com/ABCD-EFGH. This Mac moves to that room."),
             button: L("Войти", "Join")) { [weak self] text in self?.join(text) }
     }
 
@@ -579,8 +579,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         let code = String(target[target.index(after: slash)...])
         let out = NSTemporaryDirectory() + "tossling-join-\(getpid()).json"
         let model = showPanel(title: L("Войти в комнату", "Join a Room"), image: nil,
-                              note: L("Второй Mac передаёт ключ комнаты, зашифрованный кодом.", "The other Mac sends the room key, encrypted with the code."),
-                              status: L("Жду ответа от другого Mac…", "Waiting for the other Mac…"))
+                              note: L("Другой компьютер передает ключ комнаты, зашифрованный кодом.", "The other computer sends the room key, encrypted with the code."),
+                              status: L("Жду ответа от другого компьютера…", "Waiting for the other computer…"))
         var answer = ""
         inviteProcess = helperCommand(["--config", "/dev/null", "--join", address, code, "--out", out, "--id", conf.deviceID, "--name", conf.deviceName],
                                       output: { answer = $0 }) { status in
