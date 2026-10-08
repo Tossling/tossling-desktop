@@ -28,6 +28,8 @@ object Platform {
 
     val version: String = System.getProperty("tossling.version") ?: "dev"
 
+    val isArm: Boolean = System.getProperty("os.arch").orEmpty().lowercase().let { it == "aarch64" || it == "arm64" }
+
     val home: File by lazy {
         val custom = System.getenv("TOSSLING_HOME")?.takeIf { it.isNotBlank() }
         val dir = when {

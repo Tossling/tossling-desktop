@@ -124,7 +124,7 @@ class Updates(private val notifier: Notifier, private val scope: CoroutineScope)
     }
 
     companion object {
-        val FEED_URL: String = System.getenv("TOSSLING_UPDATE_FEED")?.takeIf { it.isNotBlank() } ?: "https://monoroh.com/tossling/windows.json"
+        val FEED_URL: String = System.getenv("TOSSLING_UPDATE_FEED")?.takeIf { it.isNotBlank() } ?: if (Platform.isArm) "https://monoroh.com/tossling/windows-arm64.json" else "https://monoroh.com/tossling/windows.json"
         private const val PUBLIC_KEY = "ZS/cGMRgf1n4zmwdXpGqy96Yi1pHypgQJp+Ff30pu/A="
         private const val ED25519_PREFIX = "302a300506032b6570032100"
         private const val FIRST_CHECK_MS = 20_000L

@@ -76,7 +76,15 @@ jobs:
           if-no-files-found: error
 
   windows:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            suffix: ""
+          - runner: windows-11-arm
+            suffix: "-arm64"
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
       SIGN: ${{ startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != '' }}
@@ -103,7 +111,7 @@ jobs:
       - if: env.SIGN == 'true'
         run: |
           mkdir -p app/build/unsigned
-          mv app/build/release/Tossling-*.msi "app/build/unsigned/Tossling-$(cat ../VERSION)-unsigned.msi"
+          mv app/build/release/Tossling-*.msi "app/build/unsigned/Tossling-$(cat ../VERSION)${{ matrix.suffix }}-unsigned.msi"
       - if: env.SIGN == 'true'
         id: unsigned
         uses: actions/upload-artifact@v7
@@ -124,7 +132,7 @@ jobs:
           output-artifact-directory: jvm/app/build/signed
           skip-decompress: true
       - if: env.SIGN == 'true'
-        run: mv app/build/signed/*.msi "app/build/release/Tossling-$(cat ../VERSION).msi"
+        run: mv app/build/signed/*.msi "app/build/release/Tossling-$(cat ../VERSION)${{ matrix.suffix }}.msi"
       - if: env.SIGN == 'true'
         uses: actions/upload-artifact@v7
         with:

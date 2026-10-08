@@ -18,6 +18,7 @@ REPO = "Tossling/tossling-desktop"
 TAP = ("Tossling/homebrew-tap", "Casks/tossling.rb")
 FEED = ("kopylovis/landing-web", "public/tossling/appcast.xml")
 WINDOWS_FEED = ("kopylovis/landing-web", "public/tossling/windows.json")
+WINDOWS_ARM_FEED = ("kopylovis/landing-web", "public/tossling/windows-arm64.json")
 
 
 def run(*args, capture=True):
@@ -61,20 +62,7 @@ def linux(v, tag, run_id):
     print("The Linux .deb and tar.gz for x86-64 and arm64 added to", tag)
 
 
-def windows(v, tag):
-    print("Waiting for the Windows installer from CI…")
-    run_id = None
-    for _ in range(60):
-        runs = json.loads(run("gh", "run", "list", "-R", REPO, "--workflow", "jvm.yml", "--branch", tag, "--json", "databaseId", "--limit", "1"))
-        if runs:
-            run_id = runs[0]["databaseId"]
-            break
-        time.sleep(10)
-    if run_id is None:
-        sys.exit(f"No Windows build started for {tag}: run scripts/publish.py --windows-only once it has.")
-    if subprocess.run(["gh", "run", "watch", str(run_id), "-R", REPO, "--exit-status", "--interval", "30"], capture_output=True).returncode != 0:
-        sys.exit(f"The Windows build {run_id} failed: fix it, rerun it, then scripts/publish.py --windows-only.")
-    name = f"Tossling-{v}.msi"
+def installer(v, tag, run_id, name, target):
     with tempfile.TemporaryDirectory() as tmp:
         msi = artifact(run_id, name, tmp)
         signed = run(os.path.join(SPARKLE_DIR, "bin", "sign_update"), "--account", SPARKLE_ACCOUNT, msi)
@@ -102,8 +90,25 @@ def windows(v, tag):
                 "manifest_signature": signed_manifest.group(1),
                 "notes": NOTES_URL.format(version=v),
             }, f, indent=2)
-        put(*WINDOWS_FEED, feed, f"Tossling {v} for Windows")
-    print("Windows feed updated: Tossling on Windows will offer the update once the site is rebuilt")
+        put(*target, feed, f"Tossling {v} for Windows ({os.path.basename(target[1])})")
+
+
+def windows(v, tag):
+    print("Waiting for the Windows installer from CI…")
+    run_id = None
+    for _ in range(60):
+        runs = json.loads(run("gh", "run", "list", "-R", REPO, "--workflow", "jvm.yml", "--branch", tag, "--json", "databaseId", "--limit", "1"))
+        if runs:
+            run_id = runs[0]["databaseId"]
+            break
+        time.sleep(10)
+    if run_id is None:
+        sys.exit(f"No Windows build started for {tag}: run scripts/publish.py --windows-only once it has.")
+    if subprocess.run(["gh", "run", "watch", str(run_id), "-R", REPO, "--exit-status", "--interval", "30"], capture_output=True).returncode != 0:
+        sys.exit(f"The Windows build {run_id} failed: fix it, rerun it, then scripts/publish.py --windows-only.")
+    for name, target in ((f"Tossling-{v}.msi", WINDOWS_FEED), (f"Tossling-{v}-arm64.msi", WINDOWS_ARM_FEED)):
+        installer(v, tag, run_id, name, target)
+    print("Windows feeds updated: Tossling on Windows will offer the update once the site is rebuilt")
     linux(v, tag, run_id)
 
 

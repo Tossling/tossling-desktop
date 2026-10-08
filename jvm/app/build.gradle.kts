@@ -80,6 +80,7 @@ if (System.getProperty("os.name").startsWith("Windows")) {
         val wix = rootProject.layout.buildDirectory.dir("wix311").get().asFile
         val jpackage = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }.get().metadata.installationPath.file("bin/jpackage.exe").asFile
         val version = appVersion
+        val suffix = if (System.getProperty("os.arch") == "aarch64") "-arm64" else ""
         executable = jpackage.absolutePath
         args(
             "--type", "msi",
@@ -100,7 +101,7 @@ if (System.getProperty("os.name").startsWith("Windows")) {
         doFirst { output.deleteRecursively() }
         doLast {
             val built = output.listFiles { file -> file.extension == "msi" }.orEmpty().single()
-            built.renameTo(output.resolve("Tossling-$version.msi"))
+            built.renameTo(output.resolve("Tossling-$version$suffix.msi"))
         }
     }
 }
