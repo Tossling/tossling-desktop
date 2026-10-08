@@ -48,6 +48,7 @@ compose.desktop {
             }
             linux {
                 packageName = "tossling"
+                debMaintainer = "Tossling <mnrhwow@gmail.com>"
                 shortcut = true
                 menuGroup = "Utility"
                 appCategory = "Utility"
