@@ -32,6 +32,10 @@ a Finder extension. On Windows and Linux it is a tray app, see [Windows and Linu
 lives in [tossling/tossling-mobile](https://github.com/tossling/tossling-mobile) and the server in
 [tossling/tossling-server](https://github.com/tossling/tossling-server). An iOS app is in progress.
 
+To see the phone side before setting anything up, install the Android app and tap Try without a computer, or open
+[tossling-demo.monoroh.com/demo](https://tossling-demo.monoroh.com/demo). A demo computer shares a room with the phone
+for an hour.
+
 Menus and messages follow the system language, English or Russian. `tossling language en|ru|auto` overrides it.
 
 ## What it does
