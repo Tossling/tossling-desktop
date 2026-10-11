@@ -28,6 +28,7 @@ final class Alerts: NSObject, URLSessionDataDelegate {
     private var seen = Set<String>()
     private var since = Date().timeIntervalSince1970 - 60
     private var retry = 2.0
+    private var sent: (request: URLRequest, at: Double)?
 
     override init() {
         super.init()
@@ -52,7 +53,7 @@ final class Alerts: NSObject, URLSessionDataDelegate {
     }
 
     func refresh() {
-        URLSession.shared.dataTask(with: request("v1/account")) { [weak self] data, response, _ in
+        fetch(request("v1/account")) { [weak self] data, response, _ in
             guard (response as? HTTPURLResponse)?.statusCode == 200, let data = data,
                   let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
             let list = (json["subscriptions"] as? [[String: Any]] ?? []).compactMap { item -> ProjectChannel? in
@@ -64,7 +65,7 @@ final class Alerts: NSObject, URLSessionDataDelegate {
                 self?.channels = list
                 self?.reconnect()
             }
-        }.resume()
+        }
     }
 
     func reconnect() {
@@ -81,7 +82,16 @@ final class Alerts: NSObject, URLSessionDataDelegate {
         guard !listening.isEmpty else { return }
         buffer = Data()
         let path = listening.joined(separator: ",") + "/json?since=\(Int(since))"
-        let next = session.dataTask(with: request(path))
+        let wanted = request(path)
+        if let refused = Gate.shared.refusal(for: wanted) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + refused.wait) { [weak self] in
+                guard let self = self, self.task == nil else { return }
+                self.connect()
+            }
+            return
+        }
+        sent = (wanted, Date().timeIntervalSince1970)
+        let next = session.dataTask(with: wanted)
         task = next
         next.resume()
     }
@@ -89,6 +99,7 @@ final class Alerts: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if dataTask === task, let sent = sent { Gate.shared.note(sent.request, code: code, sentAt: sent.at) }
         if code == 200 {
             retry = 2
             completionHandler(.allow)

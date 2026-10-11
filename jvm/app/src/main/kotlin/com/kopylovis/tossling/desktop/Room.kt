@@ -18,6 +18,8 @@ import com.kopylovis.tossling.protocol.crypto.sealStream
 import com.kopylovis.tossling.protocol.network.NtfyClient
 import com.kopylovis.tossling.protocol.network.NtfyEvent
 import com.kopylovis.tossling.protocol.network.NtfyException
+import com.kopylovis.tossling.protocol.network.ServerRefusal
+import com.kopylovis.tossling.protocol.network.serverRefusal
 import com.kopylovis.tossling.protocol.serverMoveTarget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -25,6 +27,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -79,6 +82,8 @@ class Room(
 
     @Volatile private var lastSent = ""
 
+    @Volatile private var refusedToken = ""
+
     @Volatile private var lastSentAt = 0L
 
     @Volatile private var lastProbe = 0L
@@ -88,6 +93,8 @@ class Room(
     val roomState: StateFlow<RoomState> = state.value
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
     val removed: SharedFlow<String> = _removed.asSharedFlow()
+
+    val refusal: ServerRefusal? get() = settings.takeIf { it.isConfigured }?.let { client.gate.refusal(endpoint = it.endpoint)?.kind }
 
     private val settings: Settings get() = store.settings.value
 
@@ -243,19 +250,24 @@ class Room(
         val token = if (isLegacy || conf.token.isEmpty()) null else runCatching { client.createToken(endpoint = conf.endpoint, label = TOKEN_LABEL) }
             .onFailure { Log.write("kept the old token: ${it.message}") }
             .getOrNull()
-        publishControl(kind = ClipMeta.KICK, to = listOf(id))
-        if (others.isNotEmpty()) {
-            val sealed = RoomKeys.seal(secret = RoomSecret(key = key, room = room, token = token), recipients = others.mapValues { it.value.pk })
-            publish(
-                meta = control(kind = ClipMeta.REKEY).copy(
-                    to = others.keys.toList(),
-                    ephemeral = sealed.ephemeral,
-                    keys = sealed.keys,
-                    room = room.takeIf { isLegacy },
-                    key = key.takeIf { isLegacy },
-                ),
-                body = null,
-            )
+        try {
+            publishControl(kind = ClipMeta.KICK, to = listOf(id))
+            if (others.isNotEmpty()) {
+                val sealed = RoomKeys.seal(secret = RoomSecret(key = key, room = room, token = token), recipients = others.mapValues { it.value.pk })
+                publish(
+                    meta = control(kind = ClipMeta.REKEY).copy(
+                        to = others.keys.toList(),
+                        ephemeral = sealed.ephemeral,
+                        keys = sealed.keys,
+                        room = room.takeIf { isLegacy },
+                        key = key.takeIf { isLegacy },
+                    ),
+                    body = null,
+                )
+            }
+        } catch (error: Throwable) {
+            if (token != null) withContext(NonCancellable) { dropToken(server = conf.server, token = token) }
+            throw error
         }
         store.update { current ->
             current.copy(
@@ -269,6 +281,12 @@ class Room(
         Log.write("disconnected $name: a new room and key${if (token == null) "" else ", a new token"}")
         notifier.notify(L("$name отключён от комнаты", "$name is disconnected from the room"))
         connect()
+    }
+
+    private suspend fun dropToken(server: String, token: String) {
+        runCatching { client.deleteToken(endpoint = Endpoint(server = server, token = token), token = token) }
+            .onSuccess { Log.write("the disconnection stopped, its new token is deleted") }
+            .onFailure { Log.write("the disconnection stopped and its new token stays on the server: ${it.message}") }
     }
 
     private suspend fun listen() {
@@ -293,13 +311,13 @@ class Room(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: NtfyException) {
-                Log.write("the server answered HTTP ${error.code}")
-                if (error.code == 401 || error.code == 403) retry = maxOf(retry, AUTH_RETRY_MS)
+                if (!error.isHeld) Log.write("the server answered HTTP ${error.code}")
+                if (!error.isHeld && serverRefusal(code = error.code) == ServerRefusal.TOKEN) tellRefused(token = conf.token)
             } catch (error: Exception) {
                 if (_connected.value) Log.write("the connection broke: ${error.message}")
             }
             _connected.value = false
-            delay(retry)
+            delay(maxOf(retry, client.gate.pauseLeft(endpoint = conf.endpoint)))
             retry = minOf(retry * 2, MAX_RETRY_MS)
         }
     }
@@ -641,6 +659,13 @@ class Room(
         return isNew
     }
 
+    private fun tellRefused(token: String) {
+        if (refusedToken == token) return
+        refusedToken = token
+        Log.write("the server no longer accepts this computer's token")
+        notifier.notify(L("Сервер больше не принимает токен этого компьютера. Войди в комнату заново через меню Tossling.", "The server no longer accepts this computer's token. Join the room again from the Tossling menu."))
+    }
+
     private suspend fun retireTokens() {
         val conf = settings
         val due = conf.retire.filter { it.at * 1000 <= now() && it.token != conf.token }
@@ -650,7 +675,13 @@ class Room(
                 Log.write("deleted the old server token")
                 true
             } catch (error: NtfyException) {
-                error.code in 400..499
+                when (error.code) {
+                    404, 410 -> true.also { Log.write("the old server token is already gone") }
+                    409 -> true.also { Log.write("the old token is the server's own token, the server keeps it") }
+                    401, 429 -> false
+                    in 400..499 -> true.also { Log.write("the old server token was not deleted: HTTP ${error.code}") }
+                    else -> false
+                }
             } catch (error: IOException) {
                 false
             }
@@ -713,7 +744,6 @@ class Room(
         private const val WAKE_CHECK_MS = 5_000L
         private const val DUPLICATE_MS = 3_000L
         private const val WAKE_GAP_MS = 30_000L
-        private const val AUTH_RETRY_MS = 30_000L
         private const val MAX_RETRY_MS = 60_000L
         private const val MAINTENANCE_DELAY_MS = 30_000L
         private const val MAINTENANCE_MS = 3_600_000L

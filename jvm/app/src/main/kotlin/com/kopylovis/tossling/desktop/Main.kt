@@ -47,6 +47,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.kopylovis.tossling.protocol.ClipKind
 import com.kopylovis.tossling.protocol.Invites
+import com.kopylovis.tossling.protocol.network.ServerRefusal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -180,10 +181,13 @@ private class TrayMenu(
         val status = when {
             !settings.isConfigured -> L("Не настроен", "Not set up")
             settings.isPaused -> L("Пауза до ${time.format(Instant.ofEpochMilli((settings.pausedUntil * 1000).toLong()).atZone(ZoneId.systemDefault()))}", "Paused until ${time.format(Instant.ofEpochMilli((settings.pausedUntil * 1000).toLong()).atZone(ZoneId.systemDefault()))}")
+            room.refusal == ServerRefusal.TOKEN -> L("Сервер больше не принимает токен этого компьютера", "The server no longer accepts this computer's token")
+            room.refusal == ServerRefusal.BUSY -> L("С этой сети слишком много запросов, сервер просит подождать", "Too many requests from this network, the server asks to wait")
             room.connected.value -> L("На связи: ${settings.server.substringAfter("://")}", "Connected to ${settings.server.substringAfter("://")}")
             else -> L("Нет связи с сервером", "No connection to the server")
         }
         item(text = status, enabled = false)
+        if (room.refusal == ServerRefusal.TOKEN) item(text = L("Войти в комнату заново…", "Join the Room Again…")) { screens.onboarding.value = true }
         updates.available.value?.let { release ->
             if (updates.installsItself) {
                 item(text = L("Установить версию ${release.version}", "Install Version ${release.version}"), enabled = !updates.busy.value) { updates.install(release) }

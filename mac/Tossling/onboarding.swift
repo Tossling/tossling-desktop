@@ -24,12 +24,13 @@ func checkServer(_ server: String, token: String, done: @escaping (String?, Stri
     guard let url = URL(string: server + "/v1/account") else { return done(L("Не понял адрес сервера", "Could not read the server address"), "") }
     var request = URLRequest(url: url, timeoutInterval: 15)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    URLSession.shared.dataTask(with: request) { data, response, error in
+    fetch(request) { data, response, error in
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         let problem: String?
         switch code {
         case 200: problem = nil
         case 401, 403: problem = L("Сервер не принял токен", "The server did not accept the token")
+        case 429: problem = Refusal.address.text
         case 0: problem = L("Нет связи с сервером", "No connection to the server") + (error.map { ": \($0.localizedDescription)" } ?? "")
         default: problem = L("Сервер ответил HTTP \(code)", "The server answered HTTP \(code)")
         }
@@ -37,7 +38,7 @@ func checkServer(_ server: String, token: String, done: @escaping (String?, Stri
             let prefix = problem == nil ? channelPrefix(server) : ""
             DispatchQueue.main.async { done(problem, prefix) }
         }
-    }.resume()
+    }
 }
 
 func writeNewConfig(_ values: [String: Any], to path: String) -> Bool {

@@ -1,5 +1,7 @@
 import base64
+import fcntl
 import getpass
+import hashlib
 import json
 import os
 import plistlib
@@ -10,6 +12,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -62,6 +65,10 @@ if has_flag(args, "-h", "--help") or (args and args[0] not in ACTIONS and not (a
 cmd = args[0] if args else "status"
 
 QR = os.path.join(CACHE, "pair.png")
+REFUSALS = os.path.join(CACHE, "refusals.json")
+FIRST_PAUSE = 60
+LONGEST_PAUSE = 30 * 60
+FORGET_AFTER = 24 * 3600
 TOKEN_RE = re.compile(r"^tk_[A-Za-z0-9]{20,}$")
 agent = Helper()
 
@@ -120,16 +127,110 @@ def migrate():
     return True
 
 
+def refusal_text(kind):
+    if kind == "token":
+        return t("Сервер больше не принимает токен этого компьютера. Подключи его к комнате заново.", "The server no longer accepts this computer's token. Connect it to the room again.")
+    return t("С этой сети слишком много запросов, сервер просит подождать. Tossling попробует позже.", "Too many requests from this network, the server asks to wait. Tossling will try again later.")
+
+
+def origin(url):
+    p = urllib.parse.urlsplit(url)
+    return f"{p.scheme}://{p.hostname or ''}{f':{p.port}' if p.port else ''}".lower()
+
+
+def gate_keys(url, token):
+    o = origin(url)
+    return {"token": f"token {o} {hashlib.sha256(token.encode()).hexdigest()[:32]}", "address": f"address {o}"}
+
+
+def refusals(change=None):
+    try:
+        os.makedirs(CACHE, mode=0o700, exist_ok=True)
+        fd = os.open(REFUSALS, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return {}
+    with os.fdopen(fd, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            before = json.load(f)
+        except ValueError:
+            before = {}
+        if not isinstance(before, dict):
+            before = {}
+        now = time.time()
+        entries = {k: v for k, v in before.items() if isinstance(v, dict) and v.get("until", 0) > now - FORGET_AFTER}
+        if change:
+            change(entries)
+        if entries != before:
+            f.seek(0)
+            f.truncate()
+            json.dump(entries, f, sort_keys=True)
+        return entries
+
+
+def is_health(url):
+    return urllib.parse.urlsplit(url).path.endswith("/v1/tossling/health")
+
+
+def refused(url, token):
+    if is_health(url):
+        return None
+    keys = gate_keys(url, token)
+    entries = refusals()
+    for kind in ("address", "token"):
+        if entries.get(keys[kind], {}).get("until", 0) > time.time():
+            return kind
+    return None
+
+
+def standing_refusal(server, token):
+    keys = gate_keys(server, token)
+    entries = refusals()
+    return next((kind for kind in ("token", "address") if keys[kind] in entries), None)
+
+
+def note_reply(url, token, code, sent):
+    if is_health(url):
+        return
+    keys = gate_keys(url, token)
+    if 200 <= code < 300:
+        def clear(entries):
+            for key in keys.values():
+                entries.pop(key, None)
+
+        refusals(clear)
+        return
+    account = "/v1/account" in urllib.parse.urlsplit(url).path
+    kind = "address" if code == 429 else "token" if code == 401 or (code == 403 and account) else None
+    if not kind:
+        return
+
+    def grow(entries):
+        entry = entries.get(keys[kind], {})
+        if entry and sent < entry.get("until", 0):
+            return
+        failures = entry.get("n", 0) + 1
+        entries[keys[kind]] = {"n": failures, "until": time.time() + min(FIRST_PAUSE * 2 ** (failures - 1), LONGEST_PAUSE)}
+
+    refusals(grow)
+
+
 def http(method, url, token, body=None, headers=None, timeout=15):
+    kind = refused(url, token)
+    if kind:
+        return (401 if kind == "token" else 429), refusal_text(kind).encode()
     req = urllib.request.Request(url, data=body, method=method,
                                  headers={"Authorization": f"Bearer {token}", **(headers or {})})
+    sent = time.time()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read()
+            code, raw = r.status, r.read()
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
+        code, raw = e.code, e.read()
     except (urllib.error.URLError, OSError) as e:
         return 0, str(getattr(e, "reason", e)).encode()
+    note_reply(url, token, code, sent)
+    return code, raw
 
 
 def error_text(raw):
@@ -208,6 +309,8 @@ def setup():
     if not token:
         sys.exit(t("Нет токена. Скопируй его (tk_…) и запусти команду ещё раз.", "No token. Copy it (tk_…) and run the command again."))
     code, raw = http("GET", f"{server}/v1/account", token)
+    if code == 429:
+        sys.exit(f"{BAD} {refusal_text('address')}")
     if code != 200:
         sys.exit(t(f"{BAD} сервер не принял токен: HTTP {code} {error_text(raw)}", f"{BAD} the server refused the token: HTTP {code} {error_text(raw)}"))
     user = json.loads(raw).get("username", "?")
@@ -690,8 +793,14 @@ def status():
         print(t(f"{BAD} tossling включён, но помощник не работает.", f"{BAD} tossling is on, but the helper is not running.") + paint("   -> tossling on", "2"))
         print(t(f"  лог: {tilde(agent.log)}", f"  log: {tilde(agent.log)}"))
         return
-    link = t(f"{OK} на связи с {conf['server']}", f"{OK} connected to {conf['server']}") if s.get("connected") else t(f"{WARN} нет связи с {conf['server']}", f"{WARN} no connection to {conf['server']}")
-    print(t(f"{link} (pid {s['pid']}, с {ago(s['started'])})", f"{link} (pid {s['pid']}, since {ago(s['started'])})"))
+    kind = standing_refusal(conf["server"], conf.get("token", ""))
+    if kind:
+        hint = paint(t("   -> tossling join <сервер>/<КОД>", "   -> tossling join <server>/<CODE>"), "2") if kind == "token" else ""
+        print(f"{BAD if kind == 'token' else WARN} {refusal_text(kind)}{hint}")
+        print(t(f"  помощник работает (pid {s['pid']}, с {ago(s['started'])})", f"  the helper is running (pid {s['pid']}, since {ago(s['started'])})"))
+    else:
+        link = t(f"{OK} на связи с {conf['server']}", f"{OK} connected to {conf['server']}") if s.get("connected") else t(f"{WARN} нет связи с {conf['server']}", f"{WARN} no connection to {conf['server']}")
+        print(t(f"{link} (pid {s['pid']}, с {ago(s['started'])})", f"{link} (pid {s['pid']}, since {ago(s['started'])})"))
     print(t(f"  этот Mac: {my_name(conf)}", f"  this Mac: {my_name(conf)}"))
     others = room_devices(conf, s)
     if others:

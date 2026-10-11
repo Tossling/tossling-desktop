@@ -58,7 +58,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     func refresh() {
         guard let button = item?.button else { return }
-        button.appearsDisabled = !connected || isPaused
+        button.appearsDisabled = !connected || isPaused || refusal != nil
         button.toolTip = "Tossling — \(statusLine())"
     }
 
@@ -71,7 +71,11 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         if let fresh = loadConfig() { conf = fresh }
         menu.removeAllItems()
-        menu.addItem(info(statusLine(), symbol: connected ? (isPaused ? "pause.circle" : "checkmark.circle") : "wifi.exclamationmark"))
+        let refused = refusal
+        menu.addItem(info(statusLine(), symbol: refused != nil ? "exclamationmark.triangle" : connected ? (isPaused ? "pause.circle" : "checkmark.circle") : "wifi.exclamationmark"))
+        if refused == .token {
+            menu.addItem(ActionItem(L("Подключить к комнате заново…", "Connect to the Room Again…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
+        }
         menu.addItem(.separator())
         addHistory(to: menu)
         menu.addItem(.separator())
@@ -111,8 +115,11 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private var isPaused: Bool { conf.pausedUntil > Date().timeIntervalSince1970 }
 
+    private var refusal: Refusal? { Gate.shared.standing(server: conf.server, token: conf.token) }
+
     private func statusLine() -> String {
         let host = conf.server.components(separatedBy: "://").last ?? conf.server
+        if let refused = refusal { return refused.text }
         if !connected { return L("Нет связи с \(host), переподключаюсь", "No connection to \(host), reconnecting") }
         if isPaused { return L("На паузе до \(clock(conf.pausedUntil)), принимаю", "Paused until \(clock(conf.pausedUntil)), receiving") }
         if !conf.auto { return L("На связи · отправляю только по \(hotkeyChoice.title)", "Connected · sending only on \(hotkeyChoice.title)") }

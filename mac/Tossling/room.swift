@@ -64,7 +64,7 @@ func memberKey(_ info: [String: Any]) -> String? {
 func createToken(label: String) -> String? {
     var r = request("v1/account/token", method: "POST")
     r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    r.httpBody = try? JSONSerialization.data(withJSONObject: ["label": label])
+    r.httpBody = try? JSONSerialization.data(withJSONObject: ["label": label, "expires": 0])
     r.timeoutInterval = 20
     let (code, body) = runSync(r)
     guard code == 200, let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
@@ -85,16 +85,39 @@ func retireTokens() {
         var r = request("v1/account/token", method: "DELETE")
         r.setValue(token, forHTTPHeaderField: "X-Token")
         r.timeoutInterval = 20
-        URLSession.shared.dataTask(with: r) { _, response, _ in
+        fetch(r) { _, response, _ in
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<500).contains(code) else { return }
+            let outcome: String
+            switch code {
+            case 200..<300: outcome = L("удалил старый токен ntfy", "deleted the old server token")
+            case 404, 410: outcome = L("старого токена ntfy уже нет: HTTP \(code)", "the old server token is already gone: HTTP \(code)")
+            case 409: outcome = L("старый токен ntfy задан в настройках сервера, удалить его нельзя: оставляю как есть", "the old server token is set in the server's configuration and cannot be deleted: leaving it as it is")
+            case 401, 429:
+                DispatchQueue.main.async { log(L("не удалил старый токен ntfy: HTTP \(code), попробую позже", "did not delete the old server token: HTTP \(code), will try later")) }
+                return
+            case 400..<500: outcome = L("старый токен ntfy уже недействителен: HTTP \(code)", "the old server token is already invalid: HTTP \(code)")
+            default: return
+            }
             DispatchQueue.main.async {
-                log(code == 200 ? L("удалил старый токен ntfy", "deleted the old server token") : L("старый токен ntfy уже недействителен: HTTP \(code)", "the old server token is already invalid: HTTP \(code)"))
+                log(outcome)
                 _ = rewriteConfig { raw in
                     raw["retire"] = (raw["retire"] as? [[String: Any]] ?? []).filter { $0["t"] as? String != token }
                 }
             }
-        }.resume()
+        }
+    }
+}
+
+func dropToken(_ token: String) {
+    var r = request("v1/account/token", method: "DELETE")
+    r.setValue(token, forHTTPHeaderField: "X-Token")
+    r.timeoutInterval = 20
+    fetch(r) { _, response, _ in
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        DispatchQueue.main.async {
+            log((200..<300).contains(code) ? L("удалил новый токен ntfy: комната осталась прежней", "deleted the new server token: the room stays as it was")
+                : L("не удалил новый токен ntfy: HTTP \(code)", "could not delete the new server token: HTTP \(code)"))
+        }
     }
 }
 
@@ -113,9 +136,13 @@ func revokeDevice(_ id: String) {
         let room = channelPrefix(conf.server) + suffix
         let token = isLegacy || oldToken.isEmpty ? nil : createToken(label: "tossling")
         DispatchQueue.main.async {
+            let abandon: (String) -> Void = { text in
+                if let token = token { dropToken(token) }
+                notify(text)
+            }
             publish(kind: "kick", mime: "text/plain", data: Data(), text: "", extra: ["to": [id]]) { kicked in
                 guard kicked else {
-                    notify(L("Не отключил \(name): нет связи с сервером", "Did not disconnect \(name): no connection to the server"))
+                    abandon(L("Не отключил \(name): нет связи с сервером", "Did not disconnect \(name): no connection to the server"))
                     return
                 }
                 let finish = {
@@ -147,7 +174,7 @@ func revokeDevice(_ id: String) {
                     extra["key"] = key
                 }
                 publish(kind: "rekey", mime: "text/plain", data: Data(), text: "", extra: extra) { ok in
-                    if ok { finish() } else { notify(L("Не разослал новый ключ: нет связи с сервером, \(name) всё ещё в комнате", "Did not send out the new key: no connection to the server, \(name) is still in the room")) }
+                    if ok { finish() } else { abandon(L("Не разослал новый ключ: нет связи с сервером, \(name) всё ещё в комнате", "Did not send out the new key: no connection to the server, \(name) is still in the room")) }
                 }
             }
         }

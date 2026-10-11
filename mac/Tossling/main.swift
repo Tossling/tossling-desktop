@@ -197,6 +197,55 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
         check(name + " seal", sealedWith(plain, key, nonce) == v["sealed"])
         check(name + " open", opened(v["sealed"] ?? "", key) == plain)
     }
+    let gateFile = scratch.appendingPathComponent("refusals.json").path
+    var now = 1_000_000.0
+    let gate = Gate(file: gateFile)
+    gate.clock = { now }
+    let call: (String, String, String) -> URLRequest = { server, path, token in
+        var r = URLRequest(url: URL(string: "\(server)/\(path)")!)
+        if !token.isEmpty { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return r
+    }
+    let room = call("https://a.example", "tossling-room/json", "tk_one")
+    check("gate pauses", [1, 2, 3, 4, 5, 6, 7, 12].map { Gate.pause($0) } == [60, 120, 240, 480, 960, 1800, 1800, 1800])
+    check("gate open at first", gate.refusal(for: room) == nil)
+    gate.note(room, code: 401, sentAt: now)
+    check("gate 401 refuses the token", gate.refusal(for: room)?.kind == .token && gate.refusal(for: room)?.wait == 60)
+    check("gate 401 keeps other tokens", gate.refusal(for: call("https://a.example", "tossling-room/json", "tk_two")) == nil)
+    check("gate 401 keeps other servers", gate.refusal(for: call("https://b.example", "tossling-room/json", "tk_one")) == nil)
+    check("gate 401 holds every path", gate.refusal(for: call("https://A.example", "v1/account", "tk_one"))?.kind == .token)
+    check("gate leaves health alone", gate.refusal(for: call("https://a.example", "v1/tossling/health", "tk_one")) == nil)
+    check("gate shows the token", gate.standing(server: "https://a.example", token: "tk_one") == .token)
+    now += 10
+    gate.note(room, code: 401, sentAt: now - 20)
+    check("gate counts simultaneous failures once", gate.refusal(for: room)?.wait == 50)
+    let other = Gate(file: gateFile)
+    other.clock = { now }
+    check("gate is shared through the file", other.refusal(for: room)?.kind == .token)
+    var waits = [Double]()
+    for _ in 0..<7 {
+        now += (gate.refusal(for: room)?.wait ?? 0) + 1
+        gate.note(room, code: 401, sentAt: now)
+        waits.append(gate.refusal(for: room)?.wait ?? 0)
+    }
+    check("gate backs off after each pause", waits == [120, 240, 480, 960, 1800, 1800, 1800])
+    gate.note(room, code: 200, sentAt: now)
+    check("gate 2xx clears", gate.refusal(for: room) == nil && gate.standing(server: "https://a.example", token: "tk_one") == nil)
+    gate.note(room, code: 401, sentAt: now)
+    check("gate starts over after 2xx", gate.refusal(for: room)?.wait == 60)
+    let stranger = call("https://c.example", "tossling-room", "tk_three")
+    gate.note(call("https://c.example", "tossling-room", "tk_four"), code: 429, sentAt: now)
+    check("gate 429 holds the whole address", gate.refusal(for: stranger)?.kind == .address && gate.refusal(for: call("https://c.example", "x", ""))?.kind == .address)
+    check("gate shows the address", gate.standing(server: "https://c.example", token: "tk_three") == .address)
+    gate.note(call("https://d.example", "tossling-room", "tk_one"), code: 403, sentAt: now)
+    check("gate 403 on a channel is not a refusal", gate.refusal(for: call("https://d.example", "tossling-room", "tk_one")) == nil)
+    gate.note(call("https://d.example", "v1/account/token", "tk_one"), code: 403, sentAt: now)
+    check("gate 403 on the account refuses the token", gate.refusal(for: call("https://d.example", "tossling-room", "tk_one"))?.kind == .token)
+    gate.note(call("https://e.example", "tossling-room", "tk_one"), code: 500, sentAt: now)
+    check("gate ignores other errors", gate.refusal(for: call("https://e.example", "tossling-room", "tk_one")) == nil)
+    now += 2 * Gate.forgetAfter
+    check("gate forgets old refusals", gate.standing(server: "https://c.example", token: "tk_three") == nil)
+    try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
 
@@ -236,10 +285,10 @@ func inviteKey(_ code: String) -> SymmetricKey {
 func runSync(_ request: URLRequest) -> (Int, Data) {
     var result = (0, Data())
     let done = DispatchSemaphore(value: 0)
-    URLSession.shared.dataTask(with: request) { data, response, _ in
+    fetch(request) { data, response, _ in
         result = ((response as? HTTPURLResponse)?.statusCode ?? 0, data ?? Data())
         done.signal()
-    }.resume()
+    }
     done.wait()
     return result
 }
@@ -247,11 +296,14 @@ func runSync(_ request: URLRequest) -> (Int, Data) {
 func waitForEvent(_ request: URLRequest, seconds: Double, _ match: @escaping ([String: Any]) -> Bool) -> (found: Bool, code: Int) {
     var found = false
     var code = 0
+    if let refused = Gate.shared.refusal(for: request) { return (false, refused.kind.code) }
+    let sentAt = Date().timeIntervalSince1970
     let done = DispatchSemaphore(value: 0)
     let task = Task.detached {
         defer { done.signal() }
         guard let (bytes, response) = try? await URLSession.shared.bytes(for: request) else { return }
         code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        Gate.shared.note(request, code: code, sentAt: sentAt)
         guard code == 200 else { return }
         do {
             for try await line in bytes.lines {
@@ -738,7 +790,7 @@ func publish(kind: String, mime: String, data: Data, text: String?, topic: Strin
         } else {
             copy.httpBody = sealedMeta.base64EncodedString().data(using: .utf8)
         }
-        URLSession.shared.dataTask(with: copy).resume()
+        fetch(copy) { _, _, _ in }
     }
     var r = request(topic ?? conf.publishTopic, method: body == nil ? "POST" : "PUT")
     r.setValue("4", forHTTPHeaderField: "X-Priority")
@@ -751,7 +803,7 @@ func publish(kind: String, mime: String, data: Data, text: String?, topic: Strin
         r.httpBody = sealedMeta.base64EncodedString().data(using: .utf8)
     }
     let what = describe(kind, data.count, text)
-    URLSession.shared.dataTask(with: r) { reply, response, error in
+    fetch(r) { reply, response, error in
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         DispatchQueue.main.async {
             if code == 200 {
@@ -793,7 +845,7 @@ func publish(kind: String, mime: String, data: Data, text: String?, topic: Strin
             writeState()
             done?(code == 200)
         }
-    }.resume()
+    }
 }
 
 final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegate {
@@ -802,6 +854,7 @@ final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegat
     let onDone: (Int, Data, URL?, Error?) -> Void
     var body = Data()
     var downloaded: URL?
+    var sent: (request: URLRequest, at: Double)?
 
     init(onProgress: @escaping (Int64, Int64) -> Void, onDone: @escaping (Int, Data, URL?, Error?) -> Void) {
         self.onProgress = onProgress
@@ -814,11 +867,25 @@ final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegat
     }
 
     func upload(_ request: URLRequest, file: URL) {
+        guard admit(request) else { return }
         session.uploadTask(with: request, fromFile: file).resume()
     }
 
     func download(_ request: URLRequest) {
+        guard admit(request) else { return }
         session.downloadTask(with: request).resume()
+    }
+
+    private func admit(_ request: URLRequest) -> Bool {
+        guard let refused = Gate.shared.refusal(for: request) else {
+            sent = (request, Date().timeIntervalSince1970)
+            return true
+        }
+        DispatchQueue.main.async {
+            self.onDone(refused.kind.code, Data(refused.kind.text.utf8), nil, nil)
+            self.session.finishTasksAndInvalidate()
+        }
+        return false
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
@@ -842,6 +909,7 @@ final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegat
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let code = (task.response as? HTTPURLResponse)?.statusCode ?? 0
+        if let sent = sent { Gate.shared.note(sent.request, code: code, sentAt: sent.at) }
         onDone(code, body, downloaded, error)
         session.finishTasksAndInvalidate()
     }
@@ -1486,7 +1554,7 @@ func handle(_ event: [String: Any], primary: Bool) {
     var r = URLRequest(url: link)
     if !conf.token.isEmpty { r.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization") }
     r.timeoutInterval = 120
-    URLSession.shared.dataTask(with: r) { data, response, _ in
+    fetch(r) { data, response, _ in
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         DispatchQueue.main.async {
             guard code == 200, let data = data, let plain = unseal(data) else {
@@ -1499,13 +1567,14 @@ func handle(_ event: [String: Any], primary: Bool) {
             }
             apply(meta, plain, fresh: age < staleAfter)
         }
-    }.resume()
+    }
 }
 
 final class Stream: NSObject, URLSessionDataDelegate {
     var session: URLSession!
     var buffer = Data()
     var retry = 1.0
+    var sent: (request: URLRequest, at: Double)?
     let topic: String
     let primary: Bool
 
@@ -1523,12 +1592,21 @@ final class Stream: NSObject, URLSessionDataDelegate {
         var path = "\(topic)/json"
         path += lastID.isEmpty || !primary ? "?since=\(Int(staleAfter))s" : "?since=\(lastID)"
         buffer = Data()
-        session.dataTask(with: request(path)).resume()
+        let next = request(path)
+        if let refused = Gate.shared.refusal(for: next) {
+            if primary { connected = false }
+            writeState()
+            DispatchQueue.main.asyncAfter(deadline: .now() + refused.wait) { self.connect() }
+            return
+        }
+        sent = (next, Date().timeIntervalSince1970)
+        session.dataTask(with: next).resume()
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if let sent = sent { Gate.shared.note(sent.request, code: code, sentAt: sent.at) }
         if code == 200 {
             if primary && !connected { log(L("подключился к \(conf.server)", "connected to \(conf.server)")) }
             if primary { connected = true }

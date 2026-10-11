@@ -1,6 +1,8 @@
+import hashlib
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import shutil
 import stat
@@ -281,6 +283,68 @@ class CliTest(unittest.TestCase):
         self.run_tossling("project", "remove", "router", lang="en")
         self.assertEqual(calls[-1][:2], ("DELETE", "/v1/tossling/projects/router"))
         self.assertEqual(calls[0][2], "Bearer tk_" + "d" * 29)
+
+    def test_refused_token_pauses_requests(self):
+        calls = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                calls.append(self.path)
+                data = json.dumps({"code": 40101, "http": 401, "error": "unauthorized"}).encode()
+                self.send_response(401)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}"
+        self.write(self.config, {"server": url, "token": "tk_" + "d" * 29, "room": "tossy-x", "key": "k", "device_id": "d"})
+        first = self.run_tossling("project", lang="en")
+        self.assertIn("HTTP 401", first.stderr)
+        self.assertEqual(len(calls), 1)
+        second = self.run_tossling("project", lang="en")
+        self.assertIn("no longer accepts this computer's token", second.stderr)
+        self.assertEqual(len(calls), 1)
+        with open(os.path.join(self.home, ".cache", "tossling", "refusals.json")) as f:
+            entries = json.load(f)
+        self.assertEqual([e["n"] for e in entries.values()], [1])
+        self.assertTrue(55 < list(entries.values())[0]["until"] - time.time() <= 60)
+        self.write(self.config, {"server": url, "token": "tk_" + "e" * 29, "room": "tossy-x", "key": "k", "device_id": "d"})
+        self.run_tossling("project", lang="en")
+        self.assertEqual(len(calls), 2)
+
+    def test_status_says_the_token_is_refused(self):
+        app = os.path.join(self.home, "Applications", "Tossling.app", "Contents")
+        os.makedirs(os.path.join(app, "Library", "LaunchAgents"))
+        os.makedirs(os.path.join(app, "MacOS"))
+        os.makedirs(os.path.join(app, "Resources"))
+        with open(os.path.join(app, "MacOS", "Tossling"), "w") as f:
+            f.write("#!/bin/sh\necho enabled\n")
+        os.chmod(os.path.join(app, "MacOS", "Tossling"), 0o755)
+        env = {"HOME": self.home, "PATH": f"{self.fakes}:/usr/bin:/bin:/usr/sbin:/sbin", "TOSSLING_FROM_SOURCE": "1"}
+        stamp = subprocess.run(["/usr/bin/python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); from helper import Helper; print(Helper().source_hash())",
+                                os.path.join(ROOT, "cli", "lib")], env=env, capture_output=True, text=True, timeout=60).stdout.strip()
+        with open(os.path.join(app, "Resources", "source.sha256"), "w") as f:
+            f.write(stamp)
+        sleeper = subprocess.Popen(["/bin/sleep", "60"])
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        self.write(os.path.join(self.home, ".cache", "tossling", "state.json"), {"pid": sleeper.pid, "started": time.time() + 100, "connected": False})
+        token = "tk_" + "d" * 29
+        self.write(self.config, {"server": "https://Ntfy.example.com", "token": token, "room": "tossy-x", "key": "k", "device_id": "d"})
+        key = "token https://ntfy.example.com " + hashlib.sha256(token.encode()).hexdigest()[:32]
+        self.write(os.path.join(self.home, ".cache", "tossling", "refusals.json"), {key: {"n": 1, "until": time.time() + 60}})
+        refused = self.run_tossling("status", lang="en").stdout
+        self.assertIn("The server no longer accepts this computer's token. Connect it to the room again.", refused)
+        self.assertIn("tossling join", refused)
+        self.assertNotIn("no connection", refused)
+        self.write(os.path.join(self.home, ".cache", "tossling", "refusals.json"), {"address https://ntfy.example.com": {"n": 2, "until": time.time() + 120}})
+        self.assertIn("слишком много запросов, сервер просит подождать", self.run_tossling("status").stdout)
 
     def test_pause_writes_private_config(self):
         self.write(self.config, {"server": "https://ntfy.example.com", "token": "tk_test"})

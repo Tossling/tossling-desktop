@@ -196,8 +196,9 @@ and Thunar items stay until the first click, which deletes all of them.
 - Content is encrypted with AES-256-GCM on the devices. Short text travels in the message itself. Longer text, images
   and files travel as attachments encrypted in 1 MiB chunks (the TSY2 format), so large files are never read into memory.
 - Every device has its own X25519 key pair. When you disconnect a device, the rest of the room moves to a new channel
-  and a new key, sealed for each remaining device (X25519, HKDF-SHA256 and AES-GCM), and to a new server token. The old
-  token is deleted after a day.
+  and a new key, sealed for each remaining device (X25519, HKDF-SHA256 and AES-GCM), and to a new server token that
+  does not expire. If the new key does not reach the room, the new token is deleted and the room stays as it was. The
+  old token is deleted after a day, unless it is set in the server's configuration.
 - The server never sees the clipboard. It knows which room channels are used and when.
 - Some things are never sent by themselves. These are items password managers mark as concealed
   (`org.nspasteboard.ConcealedType` and friends), Apple's Universal Clipboard (`com.apple.is-remote-clipboard`), files
@@ -211,6 +212,14 @@ and Thunar items stay until the first click, which deletes all of them.
 
 `tossling status` shows whether the helper is connected, and `tossling log` shows what it did and why it skipped
 something. A paused Mac does not send but still receives.
+
+### "The server no longer accepts this computer's token"
+
+The server answered 401 to this Mac's token, so the token was deleted or has expired. Tossling stops asking the server
+with that token: it tries again after 1 minute, then 2, 4, 8, 16 and every 30 minutes, so the server does not block the
+whole network for failed logins. Connect the Mac to the room again: choose Connect to the Room Again in the menu (the
+same as Devices → Join Another Room) and paste a code from another computer, or run `tossling join`. When the server
+answers 429 (too many requests from the network), Tossling waits the same way for every token.
 
 ### What I copy on an iPhone or iPad does not reach the phone
 
@@ -243,7 +252,7 @@ Allow it in Login Items & Extensions and run `tossling on`.
 | Path | What is there |
 |---|---|
 | `~/.config/tossling/config.json` | settings, room key and token (mode 600) |
-| `~/.cache/tossling/` | state, history, the device list for Finder |
+| `~/.cache/tossling/` | state, history, the device list for Finder, the server's refusals (`refusals.json`) |
 | `~/Library/Logs/Tossling.log` | the helper's log |
 | `/Applications/Tossling.app` | the installed app with the helper, the Finder extension and the `tossling` command inside |
 | `~/Applications/Tossling.app` | a source install of the helper, built from `mac/Tossling` |
