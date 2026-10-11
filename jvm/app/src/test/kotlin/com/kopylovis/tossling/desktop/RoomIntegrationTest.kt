@@ -1,6 +1,9 @@
 package com.kopylovis.tossling.desktop
 
+import com.kopylovis.tossling.protocol.Endpoint
 import com.kopylovis.tossling.protocol.Invites
+import com.kopylovis.tossling.protocol.network.NtfyClient
+import com.kopylovis.tossling.protocol.network.NtfyException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -25,6 +28,8 @@ class RoomIntegrationTest {
     private val invite = System.getenv("TOSSLING_IT_INVITE").orEmpty()
     private val macHelper = System.getenv("TOSSLING_IT_MAC_HELPER").orEmpty()
     private val macConfig = System.getenv("TOSSLING_IT_MAC_CONFIG").orEmpty()
+    private val localServer = System.getenv("TOSSLING_IT_SERVER").orEmpty()
+    private val localToken = System.getenv("TOSSLING_IT_TOKEN").orEmpty()
 
     private class Device(val dir: File, store: SettingsStore? = null) {
         val store = store ?: SettingsStore(file = File(dir, "config.json"))
@@ -134,6 +139,39 @@ class RoomIntegrationTest {
         assertNotEquals(oldRoom, laptop.store.settings.value.room)
         waitFor("the laptop is back online in the new room") { laptop.room.connected.value }
         log("revoke ok: ${laptop.notes}")
+
+        laptop.room.stop()
+        desktop.room.stop()
+        root.deleteRecursively()
+        Unit
+    }
+
+    @Test
+    fun everyComputerTalksWithATokenOfItsOwnAndARemovedOneLosesIt() = runBlocking {
+        assumeTrue("set TOSSLING_IT_SERVER and TOSSLING_IT_TOKEN to run against a local server", localServer.isNotEmpty() && localToken.isNotEmpty())
+        val root = Files.createTempDirectory("tossling-it-own").toFile()
+        val laptop = Device(dir = File(root, "laptop").apply { mkdirs() })
+        Setup(store = laptop.store).createRoom(address = localServer, token = localToken)
+        val desktopDir = File(root, "desktop").apply { mkdirs() }
+        File(laptop.dir, "config.json").copyTo(File(desktopDir, "config.json"))
+        val desktop = Device(dir = desktopDir).apply { store.update { it.copy(deviceId = "d3d3d3d3d3d3d3d3", name = "Desktop", identity = "", owner = it.owner) } }
+
+        laptop.room.start()
+        desktop.room.start()
+        waitFor("both computers have a token of their own") { laptop.store.settings.value.own.isNotEmpty() && desktop.store.settings.value.own.isNotEmpty() }
+        waitFor("both connected with them") { laptop.room.connected.value && desktop.room.connected.value }
+        waitFor("they see each other") { laptop.room.roomState.value.members["d3d3d3d3d3d3d3d3"]?.pk?.isNotEmpty() == true }
+        val client = NtfyClient()
+        val desktopOwn = desktop.store.settings.value.own
+        assertNotEquals(localToken, laptop.store.settings.value.own)
+
+        laptop.room.revoke(id = "d3d3d3d3d3d3d3d3")
+        val refused = runCatching { client.subscriptions(endpoint = Endpoint(server = localServer, token = desktopOwn)) }.exceptionOrNull() as? NtfyException
+        assertEquals(401, refused?.code)
+        assertTrue(runCatching { client.subscriptions(endpoint = laptop.store.settings.value.endpoint) }.isSuccess)
+        waitFor("the laptop is back online in the new room") { laptop.room.connected.value }
+        assertEquals(laptop.store.settings.value.own, laptop.store.settings.value.endpoint.token)
+        log("own tokens ok")
 
         laptop.room.stop()
         desktop.room.stop()

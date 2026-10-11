@@ -48,11 +48,19 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
         }
         val prefix = if (client.tosslingHealth(endpoint = Endpoint(server = server))?.isTossling == true) ROOM_PREFIX else OLD_ROOM_PREFIX
         val key = Base64.getEncoder().encodeToString(ByteArray(ClipCipher.KEY_SIZE).also(random::nextBytes))
+        forgetOwnToken()
         store.update { current ->
             val id = current.deviceId.ifEmpty { hex(DEVICE_BYTES) }
-            withIdentity(current).copy(server = server, token = clean, room = prefix + hex(ROOM_BYTES), key = key, deviceId = id, owner = id)
+            withIdentity(current).copy(server = server, token = clean, room = prefix + hex(ROOM_BYTES), key = key, deviceId = id, owner = id, own = "")
         }
         Log.write("created a room on $server")
+    }
+
+    private suspend fun forgetOwnToken() {
+        val current = store.settings.value
+        if (current.own.isEmpty()) return
+        runCatching { client.removeDevice(endpoint = current.endpoint, id = current.deviceId) }
+            .onFailure { Log.write("this computer's own token stays on ${current.server}: ${it.message}") }
     }
 
     suspend fun join(input: String): String {
@@ -92,6 +100,7 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
         }
         if (invite.isExpired()) throw SetupException(L("Приглашение устарело: запусти tossling invite ещё раз", "The invite has expired: run tossling invite again"))
         if (runCatching { ClipCipher.fromBase64(key = invite.key) }.isFailure) throw SetupException(L("Приглашение повреждено", "The invite is broken"))
+        forgetOwnToken()
         val joined = store.update { current ->
             withIdentity(current).copy(
                 server = normalizedServer(invite.server) ?: server,
@@ -100,6 +109,7 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
                 key = invite.key,
                 deviceId = current.deviceId.ifEmpty { hex(DEVICE_BYTES) },
                 owner = invite.owner.orEmpty(),
+                own = "",
             )
         }
         val identity = DeviceIdentity(privateKey = Base64.getDecoder().decode(joined.identity))

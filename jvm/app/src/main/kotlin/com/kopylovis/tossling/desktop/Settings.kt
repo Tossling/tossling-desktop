@@ -34,10 +34,13 @@ data class Settings(
     val autostart: Boolean = true,
     val language: String = "auto",
     val retire: List<RetiredToken> = emptyList(),
+    val own: String = "",
 ) {
     val isConfigured: Boolean get() = server.isNotEmpty() && room.isNotEmpty() && key.isNotEmpty() && deviceId.isNotEmpty()
 
-    val endpoint: Endpoint get() = Endpoint(server = server, token = token)
+    val endpoint: Endpoint get() = Endpoint(server = server, token = own.ifEmpty { token })
+
+    val roomEndpoint: Endpoint get() = Endpoint(server = server, token = token)
 
     val deviceName: String get() = name.ifBlank { Platform.computerName }
 
@@ -102,10 +105,10 @@ object Vault {
     }
 
     fun sealed(settings: Settings): Settings =
-        settings.copy(token = seal(settings.token), key = seal(settings.key), identity = seal(settings.identity))
+        settings.copy(token = seal(settings.token), key = seal(settings.key), identity = seal(settings.identity), own = seal(settings.own))
 
     fun opened(settings: Settings): Settings =
-        settings.copy(token = open(settings.token), key = open(settings.key), identity = open(settings.identity))
+        settings.copy(token = open(settings.token), key = open(settings.key), identity = open(settings.identity), own = open(settings.own))
 }
 
 class SettingsStore(file: File = File(Platform.home, "config.json")) {

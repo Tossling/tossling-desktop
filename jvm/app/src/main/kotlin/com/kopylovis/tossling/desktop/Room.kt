@@ -31,7 +31,9 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -41,6 +43,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.serializer
@@ -83,6 +87,10 @@ class Room(
     @Volatile private var lastSent = ""
 
     @Volatile private var refusedToken = ""
+
+    private val exchanging = Mutex()
+
+    private val withoutDeviceTokens = mutableSetOf<String>()
 
     @Volatile private var lastSentAt = 0L
 
@@ -149,6 +157,27 @@ class Room(
         ensureIdentity()
         if (state.value.value.room != settings.room) state.update { RoomState(room = settings.room) }
         session = scope.launch { listen() }
+        if (needsOwnToken(settings)) scope.launch { ensureOwnToken() }
+    }
+
+    private fun needsOwnToken(conf: Settings): Boolean = conf.isConfigured && conf.own.isEmpty() && conf.token.isNotEmpty() && conf.server !in withoutDeviceTokens
+
+    private suspend fun ensureOwnToken() = exchanging.withLock {
+        val conf = settings
+        if (!needsOwnToken(conf)) return@withLock
+        val health = runCatching { client.tosslingHealth(endpoint = Endpoint(server = conf.server)) }.getOrNull() ?: return@withLock
+        if (!health.givesDeviceTokens) {
+            withoutDeviceTokens += conf.server
+            return@withLock
+        }
+        val own = runCatching { client.deviceToken(endpoint = conf.roomEndpoint, id = conf.deviceId, name = conf.deviceName) }
+            .onFailure { Log.write("no token of its own from ${conf.server} yet: ${it.message}") }
+            .getOrNull() ?: return@withLock
+        val saved = store.update { current -> if (current.server == conf.server && current.deviceId == conf.deviceId) current.copy(own = own) else current }
+        if (saved.own == own) {
+            Log.write("${conf.server} gave this computer a token of its own")
+            connect()
+        }
     }
 
     fun stop() {
@@ -278,6 +307,11 @@ class Room(
             )
         }
         state.update { RoomState(room = room, members = it.members - id) }
+        if (conf.own.isNotEmpty()) {
+            runCatching { client.removeDevice(endpoint = conf.endpoint, id = id) }
+                .onSuccess { Log.write("deleted the own token of $name") }
+                .onFailure { Log.write("the own token of $name stays on the server: ${it.message}") }
+        }
         Log.write("disconnected $name: a new room and key${if (token == null) "" else ", a new token"}")
         notifier.notify(L("$name отключён от комнаты", "$name is disconnected from the room"))
         connect()
@@ -312,8 +346,9 @@ class Room(
                 throw error
             } catch (error: NtfyException) {
                 if (!error.isHeld) Log.write("the server answered HTTP ${error.code}")
-                if (!error.isHeld && serverRefusal(code = error.code) == ServerRefusal.TOKEN) tellRefused(token = conf.token)
+                if (!error.isHeld && serverRefusal(code = error.code) == ServerRefusal.TOKEN) tellRefused(token = conf.endpoint.token)
             } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
                 if (_connected.value) Log.write("the connection broke: ${error.message}")
             }
             _connected.value = false
@@ -694,7 +729,7 @@ class Room(
         if (!conf.isConfigured) return
         val target = serverMoveTarget(current = conf.server, url = client.tosslingHealth(endpoint = conf.endpoint)?.url) ?: return
         val isTossling = client.tosslingHealth(endpoint = Endpoint(server = target))?.isTossling == true
-        val accountOk = runCatching { client.subscriptions(endpoint = Endpoint(server = target, token = conf.token)) }.isSuccess
+        val accountOk = runCatching { client.subscriptions(endpoint = Endpoint(server = target, token = conf.endpoint.token)) }.isSuccess
         if (!acceptsServerMove(isTossling = isTossling, accountOk = accountOk)) {
             Log.write("the server is now $target, but it did not accept the token: staying on ${conf.server}")
             return
