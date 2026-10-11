@@ -137,12 +137,14 @@ final class OnboardingModel: ObservableObject {
                 step = .server
                 return
             }
-            guard writeNewConfig(newRoom(server: address, token: key, deviceID: existingDeviceID(configPath), prefix: prefix), to: configPath) else {
-                problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")
-                step = .server
-                return
+            leaveOwnToken(config: configPath) { [self] in
+                guard writeNewConfig(newRoom(server: address, token: key, deviceID: existingDeviceID(configPath), prefix: prefix), to: configPath) else {
+                    problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")
+                    step = .server
+                    return
+                }
+                start(thenPair: true)
             }
-            start(thenPair: true)
         }
     }
 
@@ -169,13 +171,15 @@ final class OnboardingModel: ObservableObject {
             }
             let values: [String: Any] = ["server": normalizedServer(server), "token": token, "room": room, "key": key,
                                          "device_id": existingDeviceID(configPath), "owner": raw["o"] as? String ?? "", "images": true]
-            guard writeNewConfig(values, to: configPath) else {
-                problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")
-                step = .join
-                return
+            leaveOwnToken(config: configPath) { [self] in
+                guard writeNewConfig(values, to: configPath) else {
+                    problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")
+                    step = .join
+                    return
+                }
+                status = output.isEmpty ? "" : L("Этот Mac в комнате с \(output)", "This Mac is in the room with \(output)")
+                start(thenPair: false)
             }
-            status = output.isEmpty ? "" : L("Этот Mac в комнате с \(output)", "This Mac is in the room with \(output)")
-            start(thenPair: false)
         }
     }
 

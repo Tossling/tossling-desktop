@@ -102,6 +102,10 @@ def drop_conf(key):
     save_conf(conf)
 
 
+def auth(conf):
+    return conf.get("own") or conf.get("token", "")
+
+
 def not_configured():
     c = read_conf()
     if c.get("server") and c.get("token"):
@@ -276,6 +280,50 @@ def api(method, base, path, token, body=None, headers=None):
     return code, raw
 
 
+def own_token():
+    conf = read_conf()
+    if conf.get("own") or not all(conf.get(k) for k in ("server", "token", "room", "device_id")):
+        return conf.get("own", "")
+    server = conf["server"].rstrip("/")
+    code, raw = http("GET", f"{server}/v1/tossling/health", "", timeout=10)
+    try:
+        offered = code == 200 and json.loads(raw).get("devices") is True
+    except (ValueError, AttributeError):
+        offered = False
+    if not offered:
+        return ""
+    body = json.dumps({"id": conf["device_id"], "name": my_name(conf)}).encode()
+    code, raw = http("POST", f"{server}/v1/tossling/devices", conf["token"], body, {"Content-Type": "application/json"})
+    try:
+        own = json.loads(raw).get("token", "") if code == 200 else ""
+    except (ValueError, AttributeError):
+        own = ""
+    if not own:
+        print(paint(t(f"свой токен пока не получен: HTTP {code}, помощник попробует позже", f"no token of its own yet: HTTP {code}, the helper will try again later"), "2"))
+        return ""
+    fresh = read_conf()
+    if fresh.get("server") != conf["server"] or fresh.get("token") != conf["token"] or fresh.get("own"):
+        return fresh.get("own", "")
+    fresh["own"] = own
+    save_conf(fresh)
+    print(t(f"{OK} сервер выдал этому Mac свой токен", f"{OK} the server gave this Mac a token of its own"))
+    return own
+
+
+def drop_own(conf):
+    own = conf.get("own")
+    if not own:
+        return
+    server = conf.get("server", "").rstrip("/")
+    if server and conf.get("device_id"):
+        code, raw = http("DELETE", f"{server}/v1/tossling/devices/{conf['device_id']}", own, timeout=10)
+        if 200 <= code < 300:
+            print(paint(t(f"свой токен этого Mac удален на {server}", f"this Mac's own token is deleted on {server}"), "2"))
+        else:
+            print(t(f"{WARN} свой токен этого Mac остался на {server}: HTTP {code} {error_text(raw)}", f"{WARN} this Mac's own token stays on {server}: HTTP {code} {error_text(raw)}"))
+    drop_conf("own")
+
+
 def new_channel():
     conf = read_conf()
     device_id = conf.get("device_id") or secrets.token_hex(8)
@@ -324,11 +372,15 @@ def setup():
     else:
         print(t(f"{OK} вложения работают, картинки пройдут", f"{OK} attachments work, images will get through"))
     values = {"server": server, "token": token}
-    if not configured() or "--new" in args:
+    fresh_room = not configured() or "--new" in args
+    if fresh_room or conf.get("server") != server:
+        drop_own(conf)
+    if fresh_room:
         write_conf(server=server)
         values.update(new_channel())
     values.setdefault("images", conf.get("images", True))
     write_conf(**values)
+    own_token()
     start()
     pair(fresh=False)
 
@@ -363,7 +415,9 @@ def pair(fresh=None):
     if not configured():
         sys.exit(not_configured())
     if fresh is None and "--new" in args:
+        drop_own(read_conf())
         write_conf(**new_channel())
+        own_token()
         start()
         print(t(f"{OK} новый ключ и каналы; телефон, подключённый раньше, больше ничего не получит.", f"{OK} a new key and channels; a phone paired before gets nothing any more."))
     agent.build()
@@ -457,7 +511,9 @@ def join():
     conf = {"server": normalize_server(invite["s"]), "token": invite["t"], "room": invite["r"], "key": invite["k"],
             "device_id": device_id, "owner": invite.get("o", ""), "images": old.get("images", True)}
     conf.update({k: old[k] for k in ("name", "aliases", "identity", "notify_app") if old.get(k)})
+    drop_own(old)
     save_conf(conf)
+    own_token()
     start()
     print(t(f"{OK} этот Mac в одной комнате с {r.stdout.strip()}: скопированное здесь появится там и на телефоне.", f"{OK} this Mac is in one room with {r.stdout.strip()}: what you copy here shows up there and on the phone."))
 
@@ -477,6 +533,7 @@ def off():
 
 def remove():
     off()
+    drop_own(read_conf())
     remove_quick_actions()
     if not agent.bundled:
         shutil.rmtree(agent.app, ignore_errors=True)
@@ -793,7 +850,7 @@ def status():
         print(t(f"{BAD} tossling включён, но помощник не работает.", f"{BAD} tossling is on, but the helper is not running.") + paint("   -> tossling on", "2"))
         print(t(f"  лог: {tilde(agent.log)}", f"  log: {tilde(agent.log)}"))
         return
-    kind = standing_refusal(conf["server"], conf.get("token", ""))
+    kind = standing_refusal(conf["server"], auth(conf))
     if kind:
         hint = paint(t("   -> tossling join <сервер>/<КОД>", "   -> tossling join <server>/<CODE>"), "2") if kind == "token" else ""
         print(f"{BAD if kind == 'token' else WARN} {refusal_text(kind)}{hint}")
@@ -802,6 +859,7 @@ def status():
         link = t(f"{OK} на связи с {conf['server']}", f"{OK} connected to {conf['server']}") if s.get("connected") else t(f"{WARN} нет связи с {conf['server']}", f"{WARN} no connection to {conf['server']}")
         print(t(f"{link} (pid {s['pid']}, с {ago(s['started'])})", f"{link} (pid {s['pid']}, since {ago(s['started'])})"))
     print(t(f"  этот Mac: {my_name(conf)}", f"  this Mac: {my_name(conf)}"))
+    print(t("  токен: свой у этого Mac", "  token: this Mac's own") if conf.get("own") else t("  токен: общий токен комнаты", "  token: the room's shared token"))
     others = room_devices(conf, s)
     if others:
         names = [t(f"{d['title']} ({own(d)}{d['kind'] or 'телефон'}, {ago(d['seen'])})", f"{d['title']} ({own(d)}{d['kind'] or 'phone'}, {ago(d['seen'])})") for d in others]
@@ -955,7 +1013,7 @@ def project():
         return json.loads(raw) if raw.strip() else None
 
     if action == "list":
-        projects = answer(*api("GET", base, "projects", conf["token"]))
+        projects = answer(*api("GET", base, "projects", auth(conf)))
         if not projects:
             print(t("Проектов пока нет: tossling project add <канал>", "No projects yet: tossling project add <channel>"))
         for p in projects:
@@ -963,7 +1021,7 @@ def project():
             print(f"{p['topic']:<24} {p.get('name', ''):<24} {paint(who, '2')}")
     elif action == "add" and rest:
         body = json.dumps({"topic": rest[0], "name": " ".join(rest[1:]), "publisher": publisher}).encode()
-        p = answer(*api("POST", base, "projects", conf["token"], body, {"Content-Type": "application/json"}))
+        p = answer(*api("POST", base, "projects", auth(conf), body, {"Content-Type": "application/json"}))
         print(t(f"{OK} проект «{p['name']}» в канале {p['topic']}, отправитель {p.get('publisher', '')}",
                 f"{OK} project «{p['name']}» on channel {p['topic']}, publisher {p.get('publisher', '')}"))
         if p.get("token"):
@@ -973,7 +1031,7 @@ def project():
         else:
             print(t("Отправитель пишет сюда своим прежним токеном.", "The publisher writes here with the token it already has."))
     elif action == "remove" and len(rest) == 1:
-        answer(*api("DELETE", base, f"projects/{rest[0]}", conf["token"]))
+        answer(*api("DELETE", base, f"projects/{rest[0]}", auth(conf)))
         print(t(f"{OK} проект {rest[0]} удалён: писать в него больше никто не может.",
                 f"{OK} project {rest[0]} removed: nobody can publish there any more."))
     else:
@@ -987,7 +1045,7 @@ def show_config():
     if not (conf.get("server") and conf.get("token")):
         print("{}")
         sys.exit(1)
-    print(json.dumps({k: conf[k] for k in ("server", "token", "alert_topics") if k in conf}))
+    print(json.dumps({**{k: conf[k] for k in ("server", "token", "alert_topics") if k in conf}, "token": auth(conf)}))
 
 
 MENU = (("status", t("состояние", "status")), ("rename", t("переименовать устройство", "rename a device")), ("invite", t("код для другого компьютера", "a code for another computer")),

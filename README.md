@@ -92,6 +92,11 @@ General section of System Settings. `setup` opens that page and waits.
 
 The token can also come from the environment, as in `TOSSLING_TOKEN=tk_… tossling setup https://tossling.example.com`.
 
+On Tossling Server 0.5 and later (except demo servers) every computer then gets a token of its own from the server and
+talks to it with that token (`own` in the config). The token from the setup page stays the room token: it goes into QR
+codes and invites, and a removal replaces it. `tossling status` says which one this Mac uses. Joining another room,
+`setup --new` and `tossling remove` delete this Mac's own token on the server first.
+
 ## The phone
 
 Install Tossling on the phone, tap "Pair with a Mac" and scan the QR code that `tossling setup` (or later
@@ -198,7 +203,8 @@ and Thunar items stay until the first click, which deletes all of them.
 - Every device has its own X25519 key pair. When you disconnect a device, the rest of the room moves to a new channel
   and a new key, sealed for each remaining device (X25519, HKDF-SHA256 and AES-GCM), and to a new server token that
   does not expire. If the new key does not reach the room, the new token is deleted and the room stays as it was. The
-  old token is deleted after a day, unless it is set in the server's configuration.
+  old token is deleted after a day, unless it is set in the server's configuration. On a server that gives devices
+  tokens of their own, the disconnected device's own token is deleted right after the new key is out.
 - The server never sees the clipboard. It knows which room channels are used and when.
 - Some things are never sent by themselves. These are items password managers mark as concealed
   (`org.nspasteboard.ConcealedType` and friends), Apple's Universal Clipboard (`com.apple.is-remote-clipboard`), files
@@ -251,7 +257,7 @@ Allow it in Login Items & Extensions and run `tossling on`.
 
 | Path | What is there |
 |---|---|
-| `~/.config/tossling/config.json` | settings, room key and token (mode 600) |
+| `~/.config/tossling/config.json` | settings, room key, the room token and this Mac's own token (mode 600) |
 | `~/.cache/tossling/` | state, history, the device list for Finder, the server's refusals (`refusals.json`) |
 | `~/Library/Logs/Tossling.log` | the helper's log |
 | `/Applications/Tossling.app` | the installed app with the helper, the Finder extension and the `tossling` command inside |

@@ -68,6 +68,10 @@ final class Alerts: NSObject, URLSessionDataDelegate {
         }
     }
 
+    func renew() {
+        task?.cancel()
+    }
+
     func reconnect() {
         let wanted = channels.map(\.topic).filter(isOn)
         guard wanted != listening || task == nil else { return }

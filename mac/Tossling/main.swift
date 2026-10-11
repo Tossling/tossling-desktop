@@ -245,6 +245,52 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("gate ignores other errors", gate.refusal(for: call("https://e.example", "tossling-room", "tk_one")) == nil)
     now += 2 * Gate.forgetAfter
     check("gate forgets old refusals", gate.standing(server: "https://c.example", token: "tk_three") == nil)
+    var device = Config()
+    device.token = "tk_room"
+    check("requests carry the room token without an own one", Gate.bearer(serverRequest("https://a.example/", "tossling-room", token: device.authToken)) == "tk_room")
+    device.own = "tk_own"
+    let ownRequest = serverRequest("https://a.example/", "tossling-room", token: device.authToken)
+    check("requests carry the own token", Gate.bearer(ownRequest) == "tk_own" && ownRequest.url?.absoluteString == "https://a.example/tossling-room")
+    var rotated: [String: Any] = ["server": "https://a.example", "token": "tk_room", "own": "tk_own", "room": "tossling-a", "key": "k1"]
+    moveRoom(&rotated, room: "tossling-b", key: "k2", token: "tk_next")
+    check("rekey keeps the own token", rotated["own"] as? String == "tk_own" && rotated["token"] as? String == "tk_next" && rotated["room"] as? String == "tossling-b")
+    moveRoom(&rotated, room: "tossling-c", key: "k3", token: nil)
+    check("rekey without a token keeps both tokens", rotated["own"] as? String == "tk_own" && rotated["token"] as? String == "tk_next")
+    let ownFile = scratch.appendingPathComponent("config.json").path
+    let roomConfig: [String: Any] = ["server": "https://a.example", "token": "tk_room", "room": "tossling-a", "key": "k1", "device_id": "d1"]
+    try? JSONSerialization.data(withJSONObject: roomConfig).write(to: URL(fileURLWithPath: ownFile))
+    var healthAsked = 0
+    var issued = [URLRequest]()
+    let answer: (URLRequest) -> (Int, Data) = { r in
+        issued.append(r)
+        return (200, Data(#"{"token":"tk_own"}"#.utf8))
+    }
+    let older = OwnToken()
+    older.health = { _ in
+        healthAsked += 1
+        return ["server": "tossling-server", "version": "0.4.0"]
+    }
+    older.issue = answer
+    check("own token: none when health does not say devices", older.fetch(config: ownFile, name: "Studio") == nil && issued.isEmpty && readConfigFile(ownFile)?["own"] == nil)
+    _ = older.fetch(config: ownFile, name: "Studio")
+    check("own token: health is asked once", healthAsked == 1)
+    let unreachable = OwnToken()
+    unreachable.health = { _ in nil }
+    unreachable.issue = answer
+    check("own token: none when the server does not answer", unreachable.fetch(config: ownFile, name: "Studio") == nil && issued.isEmpty)
+    let newer = OwnToken()
+    newer.health = { _ in ["server": "tossling-server", "devices": true] }
+    newer.issue = answer
+    let found = newer.fetch(config: ownFile, name: "Studio")
+    let kept = found.map { OwnToken.keep($0, config: ownFile) } == true
+    let saved = readConfigFile(ownFile) ?? [:]
+    check("own token: exchanged when health says devices", found?.own == "tk_own" && kept && saved["own"] as? String == "tk_own" && saved["token"] as? String == "tk_room")
+    let asked = issued.first.flatMap { $0.httpBody }.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: String]
+    check("own token: asked with the room token", issued.count == 1 && Gate.bearer(issued[0]) == "tk_room" && issued[0].httpMethod == "POST"
+          && issued[0].url?.absoluteString == "https://a.example/v1/tossling/devices" && asked == ["id": "d1", "name": "Studio"])
+    check("own token: not asked again", newer.fetch(config: ownFile, name: "Studio") == nil && issued.count == 1)
+    try? JSONSerialization.data(withJSONObject: roomConfig.merging(["token": "tk_rotated"]) { $1 }).write(to: URL(fileURLWithPath: ownFile))
+    check("own token: not kept for a config that changed meanwhile", found.map { OwnToken.keep($0, config: ownFile) } == false && readConfigFile(ownFile)?["own"] == nil)
     try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
@@ -386,6 +432,7 @@ if !joinCode.isEmpty {
 struct Config {
     var server = ""
     var token = ""
+    var own = ""
     var room = ""
     var publishTopic = ""
     var listenTopics = [String]()
@@ -409,6 +456,8 @@ struct Config {
 
     var isOwner: Bool { !owner.isEmpty && owner == deviceID }
 
+    var authToken: String { own.isEmpty ? token : own }
+
     var publicKey: String { identity?.publicKey.rawRepresentation.base64EncodedString() ?? "" }
 
     var deviceName: String { name.isEmpty ? computerName : name }
@@ -423,6 +472,7 @@ func loadConfig() -> Config? {
     var c = Config()
     c.server = server.hasSuffix("/") ? String(server.dropLast()) : server
     c.token = raw["token"] as? String ?? ""
+    c.own = raw["own"] as? String ?? ""
     c.deviceID = raw["device_id"] as? String ?? ""
     if let room = raw["room"] as? String, !room.isEmpty {
         c.room = room
@@ -472,6 +522,9 @@ if !setupServer.isEmpty {
         print(trouble)
         exit(1)
     }
+    var left = false
+    leaveOwnToken(config: configFile) { left = true }
+    while !left { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     guard writeNewConfig(newRoom(server: server, token: token, deviceID: existingDeviceID(configFile), prefix: prefix), to: configFile) else {
         print(L("не записал настройки в \(configFile)", "could not save the settings to \(configFile)"))
         exit(1)
@@ -524,7 +577,7 @@ if !inviteCode.isEmpty {
         var r = URLRequest(url: url)
         r.httpMethod = "POST"
         r.setValue("no", forHTTPHeaderField: "X-Cache")
-        if !conf.token.isEmpty { r.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization") }
+        if !conf.authToken.isEmpty { r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization") }
         r.httpBody = sealed.base64EncodedString().data(using: .utf8)
         r.timeoutInterval = 20
         return runSync(r).0
@@ -541,7 +594,7 @@ if !inviteCode.isEmpty {
     timer.setEventHandler { _ = offer() }
     timer.resume()
     var room = URLRequest(url: roomURL)
-    if !conf.token.isEmpty { room.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization") }
+    if !conf.authToken.isEmpty { room.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization") }
     room.timeoutInterval = 700
     var joined = ""
     let result = waitForEvent(room, seconds: 600) { event in
@@ -633,10 +686,7 @@ func writeState() {
 }
 
 func request(_ path: String, method: String = "GET") -> URLRequest {
-    var r = URLRequest(url: URL(string: "\(conf.server)/\(path)") ?? URL(fileURLWithPath: "/dev/null"))
-    r.httpMethod = method
-    if !conf.token.isEmpty { r.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization") }
-    return r
+    serverRequest(conf.server, path, method: method, token: conf.authToken)
 }
 
 func describe(_ kind: String, _ size: Int, _ text: String?) -> String {
@@ -1299,14 +1349,14 @@ func remember(_ meta: [String: Any]) -> Bool {
     return isNew
 }
 
-func rewriteConfig(_ change: (inout [String: Any]) -> Void) -> Bool {
-    guard let data = FileManager.default.contents(atPath: configFile),
+func rewriteConfig(at path: String = configFile, _ change: (inout [String: Any]) -> Void) -> Bool {
+    guard let data = FileManager.default.contents(atPath: path),
           var raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
     change(&raw)
     guard let out = try? JSONSerialization.data(withJSONObject: raw) else { return false }
-    let tmp = configFile + ".tmp"
+    let tmp = path + ".tmp"
     guard FileManager.default.createFile(atPath: tmp, contents: out, attributes: [.posixPermissions: 0o600]) else { return false }
-    return rename(tmp, configFile) == 0
+    return rename(tmp, path) == 0
 }
 
 func downloadURL(_ name: String) -> URL {
@@ -1356,7 +1406,7 @@ func receiveStream(_ meta: [String: Any], _ link: URL, _ id: String, fresh: Bool
     log(L("← \(from): получаю файл \(name) (\(sizeText(size)))", "← \(from): receiving the file \(name) (\(sizeText(size)))"))
     if size >= bigFile { notify(L("Получаю «\(name)» (\(sizeText(size))) от \(from)…", "Receiving «\(name)» (\(sizeText(size))) from \(from)…")) }
     var r = URLRequest(url: link)
-    if !conf.token.isEmpty { r.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization") }
+    if !conf.authToken.isEmpty { r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization") }
     let fail: (String) -> Void = { reason in
         log(L("не получил файл \(name) от \(from): \(reason)", "did not receive the file \(name) from \(from): \(reason)"))
         notify(L("Не получил «\(name)» от \(from): \(reason)", "Did not receive «\(name)» from \(from): \(reason)"))
@@ -1413,13 +1463,7 @@ func control(_ kind: String, _ meta: [String: Any]) -> Bool {
         }
         let keep = Set((meta["to"] as? [String] ?? []) + [sender])
         members = members.filter { keep.contains($0.key) }
-        let saved = rewriteConfig { raw in
-            raw["room"] = room
-            raw["key"] = key
-            if let token = opened?.token, !token.isEmpty { raw["token"] = token }
-            raw["legacy_to_mac"] = ""
-            raw["legacy_to_phone"] = ""
-        }
+        let saved = rewriteConfig { raw in moveRoom(&raw, room: room, key: key, token: opened?.token) }
         lastID = ""
         writeState()
         log(saved ? L("\(from) отключил одно из устройств: комната сменила ключ, перезапускаюсь", "\(from) disconnected a device: the room has a new key, restarting") : L("не записал новый ключ комнаты в \(configFile)", "could not save the new room key to \(configFile)"))
@@ -1552,7 +1596,7 @@ func handle(_ event: [String: Any], primary: Bool) {
         return
     }
     var r = URLRequest(url: link)
-    if !conf.token.isEmpty { r.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization") }
+    if !conf.authToken.isEmpty { r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization") }
     r.timeoutInterval = 120
     fetch(r) { data, response, _ in
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -1847,7 +1891,11 @@ term.setEventHandler { exit(0) }
 term.resume()
 
 retireTokens()
-Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in retireTokens() }
+ensureOwnToken()
+Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+    retireTokens()
+    ensureOwnToken()
+}
 followServerMove()
 Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in followServerMove() }
 

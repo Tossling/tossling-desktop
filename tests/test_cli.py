@@ -37,9 +37,9 @@ class CliTest(unittest.TestCase):
         shutil.rmtree(self.home, ignore_errors=True)
         self.assertEqual(calls, "", "тест вызвал системные команды вне временного HOME")
 
-    def run_tossling(self, *args, lang="ru"):
+    def run_tossling(self, *args, lang="ru", extra=None):
         env = {"HOME": self.home, "PATH": f"{self.fakes}:/usr/bin:/bin:/usr/sbin:/sbin", "TOSSLING_NO_MENU": "1",
-               "LANG": "ru_RU.UTF-8", "TOSSLING_FROM_SOURCE": "1"}
+               "LANG": "ru_RU.UTF-8", "TOSSLING_FROM_SOURCE": "1", **(extra or {})}
         if lang:
             env["TOSSLING_LANG"] = lang
         return subprocess.run([TOSSLING, *args], env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
@@ -318,7 +318,7 @@ class CliTest(unittest.TestCase):
         self.run_tossling("project", lang="en")
         self.assertEqual(len(calls), 2)
 
-    def test_status_says_the_token_is_refused(self):
+    def fake_helper(self):
         app = os.path.join(self.home, "Applications", "Tossling.app", "Contents")
         os.makedirs(os.path.join(app, "Library", "LaunchAgents"))
         os.makedirs(os.path.join(app, "MacOS"))
@@ -335,6 +335,9 @@ class CliTest(unittest.TestCase):
         self.addCleanup(sleeper.wait)
         self.addCleanup(sleeper.kill)
         self.write(os.path.join(self.home, ".cache", "tossling", "state.json"), {"pid": sleeper.pid, "started": time.time() + 100, "connected": False})
+
+    def test_status_says_the_token_is_refused(self):
+        self.fake_helper()
         token = "tk_" + "d" * 29
         self.write(self.config, {"server": "https://Ntfy.example.com", "token": token, "room": "tossy-x", "key": "k", "device_id": "d"})
         key = "token https://ntfy.example.com " + hashlib.sha256(token.encode()).hexdigest()[:32]
@@ -345,6 +348,118 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("no connection", refused)
         self.write(os.path.join(self.home, ".cache", "tossling", "refusals.json"), {"address https://ntfy.example.com": {"n": 2, "until": time.time() + 120}})
         self.assertIn("слишком много запросов, сервер просит подождать", self.run_tossling("status").stdout)
+
+    def device_server(self, devices):
+        calls = []
+        issued = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, code, body):
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def body(self):
+                return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
+            def do_GET(self):
+                calls.append(("GET", self.path, self.headers.get("Authorization")))
+                if self.path == "/v1/tossling/health":
+                    self.reply(200, {"server": "tossling-server", "version": "0.5.0", **({"devices": True} if devices["on"] else {})})
+                elif self.path == "/v1/account":
+                    self.reply(200, {"username": "tossy"})
+                elif self.path == "/v1/tossling/projects":
+                    self.reply(200, [])
+                else:
+                    self.reply(404, {"error": "not found"})
+
+            def do_PUT(self):
+                self.body()
+                calls.append(("PUT", self.path, self.headers.get("Authorization")))
+                self.reply(200, {"id": "m1", "attachment": {"name": "probe.bin"}})
+
+            def do_POST(self):
+                body = json.loads(self.body())
+                calls.append(("POST", self.path, self.headers.get("Authorization"), body))
+                issued.append("tk_own" + str(len(issued) + 1) * 26)
+                self.reply(200, {"token": issued[-1]})
+
+            def do_DELETE(self):
+                calls.append(("DELETE", self.path, self.headers.get("Authorization")))
+                self.reply(200, {"removed": 1})
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}", calls, issued
+
+    def read_config(self):
+        with open(self.config) as f:
+            return json.load(f)
+
+    def test_setup_gets_an_own_token_only_when_health_says_devices(self):
+        devices = {"on": False}
+        url, calls, issued = self.device_server(devices)
+        self.fake_helper()
+        room_token = "tk_" + "r" * 29
+        first = self.run_tossling("setup", url, lang="en", extra={"TOSSLING_TOKEN": room_token})
+        self.assertIn("attachments work", first.stdout)
+        self.assertNotIn("token of its own", first.stdout)
+        conf = self.read_config()
+        self.assertEqual(conf["token"], room_token)
+        self.assertNotIn("own", conf)
+        self.assertFalse([c for c in calls if c[0] in ("POST", "DELETE")])
+        self.assertIn("token: the room's shared token", self.run_tossling("status", lang="en").stdout)
+
+        devices["on"] = True
+        self.assertIn("the server gave this Mac a token of its own", self.run_tossling("setup", url, lang="en").stdout)
+        conf = self.read_config()
+        self.assertEqual(conf["own"], issued[0])
+        self.assertEqual(conf["token"], room_token)
+        post = [c for c in calls if c[0] == "POST"]
+        self.assertEqual(post, [("POST", "/v1/tossling/devices", f"Bearer {room_token}", {"id": conf["device_id"], "name": post[0][3]["name"]})])
+        self.assertTrue(post[0][3]["name"])
+        self.assertIn("token: this Mac's own", self.run_tossling("status", lang="en").stdout)
+
+        before = len(calls)
+        self.run_tossling("project", lang="en")
+        self.assertEqual(calls[before:], [("GET", "/v1/tossling/projects", f"Bearer {issued[0]}")])
+        self.assertEqual(json.loads(self.run_tossling("config", "--json").stdout)["token"], issued[0])
+
+        rotated = "tk_" + "n" * 29
+        self.run_tossling("setup", url, "--token", lang="en", extra={"TOSSLING_TOKEN": rotated})
+        conf = self.read_config()
+        self.assertEqual((conf["token"], conf["own"]), (rotated, issued[0]))
+        self.assertEqual(len(issued), 1)
+        self.assertFalse([c for c in calls if c[0] == "DELETE"])
+
+        room = conf["room"]
+        self.run_tossling("setup", url, "--new", lang="en")
+        conf = self.read_config()
+        self.assertNotEqual(conf["room"], room)
+        self.assertEqual([c for c in calls if c[0] == "DELETE"], [("DELETE", f"/v1/tossling/devices/{conf['device_id']}", f"Bearer {issued[0]}")])
+        self.assertEqual(len(issued), 2)
+        self.assertEqual((conf["token"], conf["own"]), (rotated, issued[1]))
+        self.assertEqual(calls[-1][:3], ("POST", "/v1/tossling/devices", f"Bearer {rotated}"))
+        with open(self.calls) as f:
+            self.assertEqual({line.split()[0] for line in f.read().splitlines()}, {"launchctl"})
+        os.remove(self.calls)
+
+    def test_remove_deletes_the_own_token(self):
+        url, calls, _ = self.device_server({"on": True})
+        own = "tk_" + "o" * 29
+        self.write(self.config, {"server": url, "token": "tk_" + "d" * 29, "own": own, "room": "tossling-x", "key": "k", "device_id": "d1"})
+        self.assertEqual(self.run_tossling("remove").returncode, 0)
+        self.assertEqual(calls, [("DELETE", "/v1/tossling/devices/d1", f"Bearer {own}")])
+        self.assertFalse(os.path.exists(self.config))
+        if os.path.exists(self.calls):
+            os.remove(self.calls)
 
     def test_pause_writes_private_config(self):
         self.write(self.config, {"server": "https://ntfy.example.com", "token": "tk_test"})

@@ -115,7 +115,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private var isPaused: Bool { conf.pausedUntil > Date().timeIntervalSince1970 }
 
-    private var refusal: Refusal? { Gate.shared.standing(server: conf.server, token: conf.token) }
+    private var refusal: Refusal? { Gate.shared.standing(server: conf.server, token: conf.authToken) }
 
     private func statusLine() -> String {
         let host = conf.server.components(separatedBy: "://").last ?? conf.server
@@ -598,23 +598,26 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                 model.failed(answer.isEmpty ? L("Не получилось войти в комнату", "Could not join the room") : answer)
                 return
             }
-            let saved = rewriteConfig { config in
-                config["server"] = normalizedServer(server)
-                config["token"] = token
-                config["room"] = room
-                config["key"] = key
-                config["owner"] = raw["o"] as? String ?? ""
-                config["device_id"] = conf.deviceID
-                config["legacy_to_mac"] = ""
-                config["legacy_to_phone"] = ""
+            leaveOwnToken(config: configFile) {
+                let saved = rewriteConfig { config in
+                    config["server"] = normalizedServer(server)
+                    config["token"] = token
+                    config["own"] = nil
+                    config["room"] = room
+                    config["key"] = key
+                    config["owner"] = raw["o"] as? String ?? ""
+                    config["device_id"] = conf.deviceID
+                    config["legacy_to_mac"] = ""
+                    config["legacy_to_phone"] = ""
+                }
+                guard saved else {
+                    model.failed(L("Не записал настройки в \(configFile)", "Could not save the settings to \(configFile)"))
+                    return
+                }
+                log(L("вошёл в комнату \(answer)", "joined the room of \(answer)"))
+                model.done(L("Этот Mac в комнате с \(answer). Перезапускаюсь…", "This Mac is in the room with \(answer). Restarting…"))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { restartAgent() }
             }
-            guard saved else {
-                model.failed(L("Не записал настройки в \(configFile)", "Could not save the settings to \(configFile)"))
-                return
-            }
-            log(L("вошёл в комнату \(answer)", "joined the room of \(answer)"))
-            model.done(L("Этот Mac в комнате с \(answer). Перезапускаюсь…", "This Mac is in the room with \(answer). Restarting…"))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { restartAgent() }
         }
     }
 

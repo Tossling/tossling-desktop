@@ -15,9 +15,126 @@ func healthOf(_ server: String) -> [String: Any]? {
     return health
 }
 
+func serverRequest(_ server: String, _ path: String, method: String = "GET", token: String) -> URLRequest {
+    var r = URLRequest(url: URL(string: "\(trimmedServer(server))/\(path)") ?? URL(fileURLWithPath: "/dev/null"))
+    r.httpMethod = method
+    if !token.isEmpty { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    return r
+}
+
+func readConfigFile(_ path: String) -> [String: Any]? {
+    FileManager.default.contents(atPath: path).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+}
+
+final class OwnToken {
+    static let shared = OwnToken(logs: true)
+
+    let logs: Bool
+    var health: (String) -> [String: Any]? = healthOf
+    var issue: (URLRequest) -> (Int, Data) = runSync
+    private var plain = Set<String>()
+    private let queue = DispatchQueue(label: "tossling.own-token")
+
+    init(logs: Bool = false) {
+        self.logs = logs
+    }
+
+    static func offered(_ health: [String: Any]?) -> Bool {
+        health?["devices"] as? Bool == true
+    }
+
+    func fetch(config path: String, name: String) -> (server: String, token: String, own: String)? {
+        queue.sync { obtain(path, name) }
+    }
+
+    static func keep(_ found: (server: String, token: String, own: String), config path: String) -> Bool {
+        var kept = false
+        let saved = rewriteConfig(at: path) { raw in
+            guard raw["server"] as? String == found.server, raw["token"] as? String == found.token,
+                  (raw["own"] as? String ?? "").isEmpty else { return }
+            raw["own"] = found.own
+            kept = true
+        }
+        return saved && kept
+    }
+
+    private func obtain(_ path: String, _ name: String) -> (server: String, token: String, own: String)? {
+        guard let raw = readConfigFile(path), (raw["own"] as? String ?? "").isEmpty, !(raw["room"] as? String ?? "").isEmpty,
+              let server = raw["server"] as? String, let token = raw["token"] as? String, !token.isEmpty,
+              let id = raw["device_id"] as? String, !id.isEmpty else { return nil }
+        let origin = trimmedServer(server).lowercased()
+        guard !plain.contains(origin), let health = health(server) else { return nil }
+        guard OwnToken.offered(health) else {
+            plain.insert(origin)
+            return nil
+        }
+        var r = serverRequest(server, "v1/tossling/devices", method: "POST", token: token)
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["id": id, "name": name])
+        r.timeoutInterval = 20
+        let (code, body) = issue(r)
+        guard code == 200, let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+              let own = json["token"] as? String, !own.isEmpty else {
+            if logs { DispatchQueue.main.async { log(L("не получил свой токен: HTTP \(code), попробую позже", "no token of its own yet: HTTP \(code), will try later")) } }
+            return nil
+        }
+        return (server, token, own)
+    }
+}
+
+func ensureOwnToken() {
+    guard !conf.room.isEmpty, conf.own.isEmpty, !conf.token.isEmpty else { return }
+    let path = configFile
+    let name = conf.deviceName
+    DispatchQueue.global(qos: .utility).async {
+        guard let found = OwnToken.shared.fetch(config: path, name: name) else { return }
+        DispatchQueue.main.async {
+            guard OwnToken.keep(found, config: path) else { return }
+            log(L("сервер выдал этому Mac свой токен", "the server gave this Mac a token of its own"))
+            reloadConfig()
+            streams.forEach { $0.reconnect() }
+            Alerts.shared.renew()
+        }
+    }
+}
+
+func deleteDeviceTokens(server: String, token: String, id: String, done: @escaping (Int, Int) -> Void) {
+    var r = serverRequest(server, "v1/tossling/devices/\(id)", method: "DELETE", token: token)
+    r.timeoutInterval = 15
+    fetch(r) { data, response, _ in
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let removed = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["removed"] as? Int ?? 0
+        DispatchQueue.main.async { done(code, removed) }
+    }
+}
+
+func leaveOwnToken(config path: String, done: @escaping () -> Void) {
+    guard let raw = readConfigFile(path), let own = raw["own"] as? String, !own.isEmpty else { return done() }
+    let server = raw["server"] as? String ?? ""
+    let id = raw["device_id"] as? String ?? ""
+    let forget = {
+        _ = rewriteConfig(at: path) { $0["own"] = nil }
+        done()
+    }
+    guard !server.isEmpty, !id.isEmpty else { return forget() }
+    deleteDeviceTokens(server: server, token: own, id: id) { code, _ in
+        log((200..<300).contains(code) ? L("удалил свой токен этого Mac на \(trimmedServer(server))", "deleted this Mac's own token on \(trimmedServer(server))")
+            : L("свой токен этого Mac остался на \(trimmedServer(server)): HTTP \(code)", "this Mac's own token stays on \(trimmedServer(server)): HTTP \(code)"))
+        forget()
+    }
+}
+
+func moveRoom(_ raw: inout [String: Any], room: String, key: String, token: String?) {
+    raw["room"] = room
+    raw["key"] = key
+    raw["legacy_to_mac"] = ""
+    raw["legacy_to_phone"] = ""
+    if let token = token, !token.isEmpty { raw["token"] = token }
+}
+
 func followServerMove() {
     let current = trimmedServer(conf.server)
-    let token = conf.token
+    let token = conf.authToken
     DispatchQueue.global(qos: .utility).async {
         guard let main = healthOf(current)?["url"] as? String, !main.isEmpty else { return }
         let target = trimmedServer(normalizedServer(main))
@@ -132,6 +249,8 @@ func revokeDevice(_ id: String) {
     let suffix = randomHex(12)
     let key = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.base64EncodedString()
     let oldToken = conf.token
+    let own = conf.own
+    let server = conf.server
     DispatchQueue.global(qos: .userInitiated).async {
         let room = channelPrefix(conf.server) + suffix
         let token = isLegacy || oldToken.isEmpty ? nil : createToken(label: "tossling")
@@ -147,12 +266,8 @@ func revokeDevice(_ id: String) {
                 }
                 let finish = {
                     let saved = rewriteConfig { raw in
-                        raw["room"] = room
-                        raw["key"] = key
-                        raw["legacy_to_mac"] = ""
-                        raw["legacy_to_phone"] = ""
-                        if let token = token {
-                            raw["token"] = token
+                        moveRoom(&raw, room: room, key: key, token: token)
+                        if token != nil {
                             var retire = raw["retire"] as? [[String: Any]] ?? []
                             retire.append(["t": oldToken, "at": Date().timeIntervalSince1970 + 24 * 3600])
                             raw["retire"] = retire
@@ -163,7 +278,13 @@ func revokeDevice(_ id: String) {
                     writeState()
                     log(L("отключил \(name): новая комната и ключ\(token == nil ? "" : ", новый токен")", "disconnected \(name): a new room and key\(token == nil ? "" : ", a new token")"))
                     notify(L("\(name) отключён от комнаты\(isLegacy ? ". Часть устройств без ключей: обнови их и отключи ещё раз, если нужно" : "")", "\(name) is disconnected from the room\(isLegacy ? ". Some devices have no keys: update them and disconnect again if needed" : "")"))
-                    if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } }
+                    let restart = { if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } } }
+                    guard !own.isEmpty else { return restart() }
+                    deleteDeviceTokens(server: server, token: own, id: id) { code, removed in
+                        log((200..<300).contains(code) ? L("удалил токены \(name) на сервере: \(removed)", "deleted the server tokens of \(name): \(removed)")
+                            : L("токен \(name) остался на сервере: HTTP \(code)", "the server token of \(name) stays: HTTP \(code)"))
+                        restart()
+                    }
                 }
                 guard !others.isEmpty else { return finish() }
                 let keys = others.compactMapValues(memberKey)
