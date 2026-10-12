@@ -670,8 +670,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         let alert = NSAlert()
         alert.messageText = L("Сервер не принимает токен этого Mac", "The server refuses this Mac's token")
         alert.informativeText = (problem.isEmpty ? "" : problem + ". ")
-            + L("Новую комнату можно создать с токеном сервера. Он есть на странице настройки сервера. Если ссылка на нее уже не работает, открой панель сервера, раздел Безопасность, и нажми Новая ссылка настройки.",
-                "A new room can be created with the server token. It is on the server's setup page. If the link to it no longer works, open the server panel, Security, and click New setup link.")
+            + L("Новую комнату можно создать с токеном сервера. Его показывает панель сервера в разделе Безопасность после ввода пароля, он же есть на странице настройки.",
+                "A new room can be created with the server token. The server panel shows it under Security after you enter the password, and it is on the setup page too.")
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 96))
         let addressLabel = NSTextField(labelWithString: L("Адрес сервера", "Server address"))
         addressLabel.frame = NSRect(x: 0, y: 78, width: 300, height: 16)

@@ -448,8 +448,8 @@ private fun OnboardingWindow(store: SettingsStore, askingToken: Boolean, onDone:
                     Text(
                         text = if (askingToken) {
                             L(
-                                "Чтобы создать новую комнату, вставь токен сервера. Он есть на странице настройки сервера. Если ссылка на нее уже не работает, открой панель сервера, раздел Безопасность, и нажми Новая ссылка настройки. Потом откроется окно, где можно добавить устройства.",
-                                "To create a new room, paste the server token. It is on the server's setup page. If the link to it no longer works, open the server panel, Security, and click New setup link. Then a window opens where you can add devices.",
+                                "Чтобы создать новую комнату, вставь токен сервера. Его показывает панель сервера в разделе Безопасность после ввода пароля, он же есть на странице настройки. Потом откроется окно, где можно добавить устройства.",
+                                "To create a new room, paste the server token. The server panel shows it under Security after you enter the password, and it is on the setup page too. Then a window opens where you can add devices.",
                             )
                         } else {
                             L(
