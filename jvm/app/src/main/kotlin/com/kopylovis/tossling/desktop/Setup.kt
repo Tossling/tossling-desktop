@@ -11,11 +11,14 @@ import com.kopylovis.tossling.protocol.crypto.ClipCipher
 import com.kopylovis.tossling.protocol.crypto.DeviceIdentity
 import com.kopylovis.tossling.protocol.network.NtfyClient
 import com.kopylovis.tossling.protocol.network.NtfyException
+import com.kopylovis.tossling.protocol.network.ServerRefusal
+import com.kopylovis.tossling.protocol.network.serverRefusal
 import com.kopylovis.tossling.protocol.normalizedServer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -24,6 +27,8 @@ import java.security.SecureRandom
 import java.util.Base64
 
 class SetupException(message: String) : Exception(message)
+
+class TokenRefusedException : Exception("the server refuses this computer's token")
 
 class Setup(private val store: SettingsStore, private val client: NtfyClient = NtfyClient()) {
 
@@ -54,6 +59,35 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
             withIdentity(current).copy(server = server, token = clean, room = prefix + hex(ROOM_BYTES), key = key, deviceId = id, owner = id, own = "")
         }
         Log.write("created a room on $server")
+    }
+
+    suspend fun createNewRoom() {
+        val current = store.settings.value
+        val endpoint = current.endpoint
+        val token = try {
+            client.subscriptions(endpoint = endpoint)
+            client.createToken(endpoint = endpoint, label = TOKEN_LABEL)
+        } catch (error: NtfyException) {
+            throw when {
+                serverRefusal(code = error.code, isAccount = true) == ServerRefusal.TOKEN -> TokenRefusedException()
+                error.code == 409 -> SetupException(L("На сервере уже 60 токенов. Удали ненужные в разделе Security в панели сервера и попробуй еще раз.", "The server already keeps 60 tokens. Remove unused ones under Security in the server panel and try again."))
+                error.code == 429 -> SetupException(L("С этой сети слишком много запросов, сервер просит подождать", "Too many requests from this network, the server asks to wait"))
+                else -> SetupException(L("Сервер ответил HTTP ${error.code}", "The server answered HTTP ${error.code}"))
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw SetupException(L("Нет связи с сервером: ${error.message}", "No connection to the server: ${error.message}"))
+        }
+        try {
+            createRoom(address = current.server, token = token)
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                runCatching { client.deleteToken(endpoint = Endpoint(server = current.server, token = token), token = token) }
+                    .onFailure { Log.write("the new room stopped and its token stays on ${current.server}: ${it.message}") }
+            }
+            throw error
+        }
     }
 
     private suspend fun forgetOwnToken() {
@@ -136,6 +170,7 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
 
     companion object {
         private const val ROOM_BYTES = 12
+        private const val TOKEN_LABEL = "tossling"
         private const val DEVICE_BYTES = 8
         private const val WAIT_MS = 70_000L
 

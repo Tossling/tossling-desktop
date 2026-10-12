@@ -698,7 +698,7 @@ class Room(
         if (refusedToken == token) return
         refusedToken = token
         Log.write("the server no longer accepts this computer's token")
-        notifier.notify(L("Сервер больше не принимает токен этого компьютера. Войди в комнату заново через меню Tossling.", "The server no longer accepts this computer's token. Join the room again from the Tossling menu."))
+        notifier.notify(L("Сервер больше не принимает токен этого компьютера. Создай новую комнату или войди в другую через меню Tossling.", "The server no longer accepts this computer's token. Create a new room or join another one from the Tossling menu."))
     }
 
     private suspend fun retireTokens() {

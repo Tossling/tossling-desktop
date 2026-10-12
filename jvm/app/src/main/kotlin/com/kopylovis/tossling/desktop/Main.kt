@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -108,12 +109,16 @@ fun main(args: Array<String>) {
     }
     updates.start()
     val onboarding = screens.onboarding
-    val pairing = screens.pairing
+    val adding = screens.adding
+    val onDone = { joined: String? ->
+        room.connect()
+        if (joined == null) adding.value = true else tray.notify(L("Этот компьютер в комнате с $joined", "This computer is in the room with $joined"))
+    }
     application {
         val settings by store.settings.collectAsState()
         val showOnboarding by onboarding.collectAsState()
-        val showPairing by pairing.collectAsState()
-        val showInvite by screens.inviting.collectAsState()
+        val showAdding by adding.collectAsState()
+        val showServerToken by screens.serverToken.collectAsState()
         LaunchedEffect(Unit) {
             room.start()
             room.removed.collect { onboarding.value = true }
@@ -122,10 +127,10 @@ fun main(args: Array<String>) {
         if (showOnboarding) {
             OnboardingWindow(
                 store = store,
+                askingToken = false,
                 onDone = { joined ->
-                    room.connect()
                     onboarding.value = false
-                    if (joined == null) pairing.value = true else tray.notify(L("Этот компьютер в комнате с $joined", "This computer is in the room with $joined"))
+                    onDone(joined)
                 },
                 onClose = {
                     if (store.settings.value.isConfigured) {
@@ -150,14 +155,24 @@ fun main(args: Array<String>) {
                 exitApplication()
             })
         }
-        if (showPairing && settings.isConfigured) PairWindow(payload = room.pairingPayload(), onClose = { pairing.value = false })
-        if (showInvite && settings.isConfigured) InviteWindow(room = room, server = settings.server, onClose = { screens.inviting.value = false })
+        if (showServerToken && settings.isConfigured) {
+            OnboardingWindow(
+                store = store,
+                askingToken = true,
+                onDone = {
+                    screens.serverToken.value = false
+                    onDone(null)
+                },
+                onClose = { screens.serverToken.value = false },
+            )
+        }
+        if (showAdding && settings.isConfigured) key(settings.room) { AddDeviceWindow(room = room, settings = settings, onClose = { adding.value = false }) }
     }
 }
 
 private class Screens(val onboarding: MutableStateFlow<Boolean>) {
-    val pairing = MutableStateFlow(false)
-    val inviting = MutableStateFlow(false)
+    val adding = MutableStateFlow(false)
+    val serverToken = MutableStateFlow(false)
 }
 
 private class TrayMenu(
@@ -169,6 +184,10 @@ private class TrayMenu(
     private val screens: Screens,
     private val onQuit: () -> Unit,
 ) {
+
+    private val setup = Setup(store = store)
+
+    @Volatile private var creating = false
 
     fun build(): List<MenuEntry> = menuOf { trayMenu() }
 
@@ -187,7 +206,10 @@ private class TrayMenu(
             else -> L("Нет связи с сервером", "No connection to the server")
         }
         item(text = status, enabled = false)
-        if (room.refusal == ServerRefusal.TOKEN) item(text = L("Войти в комнату заново…", "Join the Room Again…")) { screens.onboarding.value = true }
+        if (room.refusal == ServerRefusal.TOKEN) {
+            item(text = L("Новая комната…", "New Room…"), enabled = !creating) { newRoom() }
+            item(text = L("Войти в другую комнату…", "Join Another Room…")) { screens.onboarding.value = true }
+        }
         updates.available.value?.let { release ->
             if (updates.installsItself) {
                 item(text = L("Установить версию ${release.version}", "Install Version ${release.version}"), enabled = !updates.busy.value) { updates.install(release) }
@@ -260,6 +282,7 @@ private class TrayMenu(
         val settings = store.settings.value
         val now = System.currentTimeMillis()
         val others = room.roomState.value.members.values.filter { it.id != settings.deviceId }.sortedBy { it.since }
+        val refused = room.refusal == ServerRefusal.TOKEN
         if (others.isEmpty()) item(text = L("Больше никого", "Nobody else yet"), enabled = false)
         others.forEach { member ->
             val online = now - member.seen < Room.ONLINE_MS
@@ -268,8 +291,12 @@ private class TrayMenu(
                 item(text = L("Переименовать…", "Rename…")) {
                     rename(title = L("Как подписывать «${member.name}» на этом компьютере", "How this computer shows «${member.name}»"), current = room.nameOf(member)) { room.setAlias(id = member.id, alias = it) }
                 }
-                item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) {
-                    tasks.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
+                if (refused) {
+                    item(text = L("Отключить нельзя, сервер не принимает токен этого компьютера", "Cannot disconnect while the server refuses this computer's token"), enabled = false)
+                } else {
+                    item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) {
+                        tasks.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
+                    }
                 }
             }
         }
@@ -279,9 +306,45 @@ private class TrayMenu(
                 if (name.isNotEmpty()) room.rename(name = name)
             }
         }
-        item(text = L("Пригласить компьютер…", "Invite a Computer…")) { screens.inviting.value = true }
-        item(text = L("Подключить телефон…", "Connect a Phone…")) { screens.pairing.value = true }
+        item(text = L("Добавить устройство…", "Add a Device…")) { screens.adding.value = true }
+        item(text = L("Новая комната…", "New Room…"), enabled = !creating) { newRoom() }
         item(text = L("Войти в другую комнату…", "Join Another Room…")) { screens.onboarding.value = true }
+    }
+
+    private fun newRoom() {
+        val server = store.settings.value.server.substringAfter("://")
+        val create = L("Создать", "Create")
+        val choice = JOptionPane.showOptionDialog(
+            null,
+            L(
+                "Этот компьютер выйдет из текущей комнаты и создаст новую на $server. Остальные устройства останутся в старой комнате, пока ты не добавишь их в новую.",
+                "This computer leaves the current room and creates a new one on $server. The other devices stay in the old room until you add them to the new one.",
+            ),
+            L("Новая комната", "New Room"),
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            arrayOf(create, L("Отмена", "Cancel")),
+            create,
+        )
+        if (choice != 0 || creating) return
+        creating = true
+        tasks.launch {
+            try {
+                setup.createNewRoom()
+                room.connect()
+                screens.adding.value = true
+            } catch (error: TokenRefusedException) {
+                screens.serverToken.value = true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                val text = error.message ?: error.toString()
+                SwingUtilities.invokeLater { JOptionPane.showMessageDialog(null, text, "Tossling", JOptionPane.WARNING_MESSAGE) }
+            } finally {
+                creating = false
+            }
+        }
     }
 
     private fun presence(): String {
@@ -343,10 +406,10 @@ private fun TosslingTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun OnboardingWindow(store: SettingsStore, onDone: (joined: String?) -> Unit, onClose: () -> Unit) {
+private fun OnboardingWindow(store: SettingsStore, askingToken: Boolean, onDone: (joined: String?) -> Unit, onClose: () -> Unit) {
     val setup = remember { Setup(store = store) }
     val scope = rememberCoroutineScope()
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(if (askingToken) 1 else 0) }
     var server by remember { mutableStateOf(store.settings.value.server.substringAfter("://")) }
     var token by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf("") }
@@ -362,26 +425,37 @@ private fun OnboardingWindow(store: SettingsStore, onDone: (joined: String?) -> 
     ) {
         TosslingTheme {
             Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text(text = L("Один буфер обмена на компьютеры и телефон", "One clipboard for your computers and phone"), style = MaterialTheme.typography.titleMedium)
-                PrimaryTabRow(selectedTabIndex = tab) {
-                    Tab(selected = tab == 0, onClick = { tab = 0; problem = null }, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant, text = { Text(L("Войти в комнату", "Join a room")) })
-                    Tab(selected = tab == 1, onClick = { tab = 1; problem = null }, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant, text = { Text(L("Новая комната", "New room")) })
+                if (askingToken) {
+                    Text(text = L("Сервер не принимает токен этого компьютера", "The server refuses this computer's token"), style = MaterialTheme.typography.titleMedium)
+                } else {
+                    Text(text = L("Один буфер обмена на компьютеры и телефон", "One clipboard for your computers and phone"), style = MaterialTheme.typography.titleMedium)
+                    PrimaryTabRow(selectedTabIndex = tab) {
+                        Tab(selected = tab == 0, onClick = { tab = 0; problem = null }, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant, text = { Text(L("Войти в комнату", "Join a room")) })
+                        Tab(selected = tab == 1, onClick = { tab = 1; problem = null }, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant, text = { Text(L("Новая комната", "New room")) })
+                    }
                 }
                 if (tab == 0) {
                     Text(
                         text = L(
-                            "На компьютере, который уже в комнате, открой меню Tossling → Устройства → Пригласить компьютер (на Mac — команда tossling invite) и вставь сюда строку с адресом и кодом.",
-                            "On a computer that is already in the room, open the Tossling menu → Devices → Invite a Computer (on a Mac, the tossling invite command) and paste the line with the address and code here.",
+                            "На компьютере, который уже в комнате, открой меню Tossling → Устройства → Добавить устройство (на Mac подойдет и команда tossling invite) и вставь сюда строку с адресом и кодом.",
+                            "On a computer that is already in the room, open the Tossling menu → Devices → Add a Device (on a Mac, the tossling invite command works too) and paste the line with the address and code here.",
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     OutlinedTextField(value = invite, onValueChange = { invite = it }, label = { Text(L("Адрес и код", "Address and code")) }, placeholder = { Text("tossling.example.com/7KQ2-M9XD") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 } else {
                     Text(
-                        text = L(
-                            "Адрес сервера Tossling и токен с его страницы настройки. Комната будет новой: телефон потом подключится по QR-коду.",
-                            "The address of your Tossling server and the token from its setup page. The room is new: the phone joins it by a QR code afterwards.",
-                        ),
+                        text = if (askingToken) {
+                            L(
+                                "Чтобы создать новую комнату, вставь токен сервера. Он есть на странице настройки сервера и в разделе Security в его панели. Потом откроется окно, где можно добавить устройства.",
+                                "To create a new room, paste the server token. It is on the server's setup page and under Security in its panel. Then a window opens where you can add devices.",
+                            )
+                        } else {
+                            L(
+                                "Адрес сервера Tossling и токен с его страницы настройки. Комната будет новой: телефон потом подключится по QR-коду.",
+                                "The address of your Tossling server and the token from its setup page. The room is new: the phone joins it by a QR code afterwards.",
+                            )
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     OutlinedTextField(value = server, onValueChange = { server = it }, label = { Text(L("Сервер", "Server")) }, placeholder = { Text("tossling.example.com") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
@@ -424,66 +498,72 @@ private fun OnboardingWindow(store: SettingsStore, onDone: (joined: String?) -> 
 }
 
 @Composable
-private fun PairWindow(payload: String, onClose: () -> Unit) {
-    val image = remember(payload) { Qr.image(text = payload).toComposeImageBitmap() }
-    Window(onCloseRequest = onClose, title = L("Подключить телефон", "Connect a Phone"), icon = resourcePainter("icon.png"), state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(440.dp, 560.dp)), resizable = false) {
-        TosslingTheme {
-            Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    text = L("Открой Tossling на телефоне и отсканируй код. В коде ключ комнаты: не показывай его посторонним.", "Open Tossling on the phone and scan the code. It holds the room key: do not show it to anyone else."),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Image(bitmap = image, contentDescription = null, modifier = Modifier.size(340.dp))
-                OutlinedButton(onClick = onClose) { Text(L("Готово", "Done")) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun InviteWindow(room: Room, server: String, onClose: () -> Unit) {
+private fun AddDeviceWindow(room: Room, settings: Settings, onClose: () -> Unit) {
+    val image = remember(settings) { Qr.image(text = room.pairingPayload()).toComposeImageBitmap() }
     val code = remember { Invites.newCode() }
-    val line = remember(server) { "${server.removePrefix("https://")}/$code" }
-    var joined by remember { mutableStateOf<String?>(null) }
+    val line = remember(settings.server) { "${settings.server.removePrefix("https://")}/$code" }
+    val known = remember { room.roomState.value.members.keys }
+    val state by room.roomState.collectAsState()
+    var computer by remember { mutableStateOf<String?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(code) {
         try {
-            joined = room.invite(code = code) ?: run {
-                problem = L("Приглашение истекло: открой новое", "The invite has expired: open a new one")
+            computer = room.invite(code = code) ?: run {
+                problem = L("Строка для компьютера истекла, открой это окно заново", "The line for a computer has expired, open this window again")
                 null
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            problem = L("Не отправил приглашение: ${error.message}", "Could not send the invite: ${error.message}")
+            problem = L("Не отправил приглашение для компьютера. ${error.message}", "Could not send the invite for a computer: ${error.message}")
         }
     }
-    Window(onCloseRequest = onClose, title = L("Пригласить компьютер", "Invite a Computer"), icon = resourcePainter("icon.png"), state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(520.dp, 380.dp)), resizable = false) {
+    val joined = (state.members.values.filter { it.id !in known && it.id != settings.deviceId }.map(room::nameOf) + listOfNotNull(computer)).distinct()
+    Window(onCloseRequest = onClose, title = L("Добавить устройство", "Add a Device"), icon = resourcePainter("icon.png"), state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(860.dp, 600.dp)), resizable = false) {
         TosslingTheme {
             Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    text = L(
-                        "На другом компьютере открой Tossling → «Войти в комнату» и вставь эту строку. На Mac можно выполнить tossling join и эту строку. С ней входят в комнату: не показывай её посторонним.",
-                        "On the other computer, open Tossling → «Join a room» and paste this line. On a Mac, run tossling join with this line. It lets anyone into the room: do not show it to others.",
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                SelectionContainer { Text(text = line, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace) }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(enabled = joined == null && problem == null, onClick = {
-                        room.copyAgain(Clip.Text(line))
-                        copied = true
-                    }) { Text(if (copied) L("Скопировано", "Copied") else L("Скопировать", "Copy")) }
-                    OutlinedButton(onClick = onClose) { Text(if (joined != null) L("Готово", "Done") else L("Закрыть", "Close")) }
-                }
-                when {
-                    joined != null -> Text(text = L("$joined в комнате", "$joined is in the room"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge)
-                    problem != null -> Text(text = problem.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                    else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text(text = L("Жду, пока компьютер войдёт. Приглашение действует 10 минут.", "Waiting for the computer to join. The invite works for 10 minutes."), style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(text = L("Телефон", "Phone"), style = MaterialTheme.typography.titleMedium)
+                        Text(text = L("Открой Tossling на телефоне и отсканируй этот код.", "Open Tossling on the phone and scan this code."), style = MaterialTheme.typography.bodyMedium)
+                        Image(bitmap = image, contentDescription = null, modifier = Modifier.size(300.dp))
                     }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(text = L("Компьютер", "Computer"), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = L(
+                                "На Windows или Linux вставь эту строку в Tossling → Устройства → Войти в другую комнату, а при первом запуске во вкладку Войти в комнату. На Mac выполни в Терминале tossling join и эту строку.",
+                                "On Windows or Linux, paste this line in Tossling → Devices → Join Another Room, or in the Join a room tab on the first start. On a Mac, run tossling join with this line in Terminal.",
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        SelectionContainer { Text(text = line, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace) }
+                        Button(enabled = computer == null && problem == null, onClick = {
+                            room.copyAgain(Clip.Text(line))
+                            copied = true
+                        }) { Text(if (copied) L("Скопировано", "Copied") else L("Скопировать", "Copy")) }
+                        problem?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+                    }
+                }
+                Text(text = L("С этими кодами входят в комнату, не показывай их посторонним.", "These codes let anyone into the room, do not show them to others."), style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (joined.isEmpty()) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text(
+                            text = if (problem == null) {
+                                L("Жду новые устройства. Строка для компьютера действует 10 минут.", "Waiting for new devices. The line for a computer works for 10 minutes.")
+                            } else {
+                                L("Жду телефон.", "Waiting for the phone.")
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        val names = joined.joinToString()
+                        Text(text = L("$names в комнате", if (joined.size == 1) "$names is in the room" else "$names are in the room"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge)
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = onClose) { Text(if (joined.isNotEmpty()) L("Готово", "Done") else L("Закрыть", "Close")) }
                 }
             }
         }

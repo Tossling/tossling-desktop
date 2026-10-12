@@ -179,6 +179,67 @@ class RoomIntegrationTest {
         Unit
     }
 
+    @Test
+    fun aComputerInARoomCreatesANewRoomWithAFreshToken() = runBlocking {
+        assumeTrue("set TOSSLING_IT_SERVER and TOSSLING_IT_TOKEN to run against a local server", localServer.isNotEmpty() && localToken.isNotEmpty())
+        val root = Files.createTempDirectory("tossling-it-new").toFile()
+        val laptop = Device(dir = File(root, "laptop").apply { mkdirs() })
+        Setup(store = laptop.store).createRoom(address = localServer, token = localToken)
+        val desktopDir = File(root, "desktop").apply { mkdirs() }
+        File(laptop.dir, "config.json").copyTo(File(desktopDir, "config.json"))
+        val desktop = Device(dir = desktopDir).apply { store.update { it.copy(deviceId = "d4d4d4d4d4d4d4d4", name = "Desktop", identity = "") } }
+
+        laptop.room.start()
+        desktop.room.start()
+        waitFor("both computers have a token of their own") { laptop.store.settings.value.own.isNotEmpty() && desktop.store.settings.value.own.isNotEmpty() }
+        waitFor("both connected") { laptop.room.connected.value && desktop.room.connected.value }
+        waitFor("they see each other") { laptop.room.roomState.value.members.containsKey("d4d4d4d4d4d4d4d4") }
+        val old = laptop.store.settings.value
+
+        Setup(store = laptop.store).createNewRoom()
+        laptop.room.connect()
+        val fresh = laptop.store.settings.value
+        assertNotEquals(old.room, fresh.room)
+        assertNotEquals(old.key, fresh.key)
+        assertNotEquals(old.token, fresh.token)
+        assertNotEquals(localToken, fresh.token)
+        assertEquals(fresh.deviceId, fresh.owner)
+        assertTrue(laptop.room.roomState.value.members.keys.none { it == "d4d4d4d4d4d4d4d4" })
+        val client = NtfyClient()
+        val refused = runCatching { client.subscriptions(endpoint = Endpoint(server = localServer, token = old.own)) }.exceptionOrNull() as? NtfyException
+        assertEquals(401, refused?.code)
+        waitFor("the laptop has a new token of its own") { laptop.store.settings.value.own.let { it.isNotEmpty() && it != old.own } }
+        waitFor("the laptop is online in the new room") { laptop.room.connected.value }
+        assertTrue(runCatching { client.subscriptions(endpoint = laptop.store.settings.value.endpoint) }.isSuccess)
+        assertTrue(runCatching { client.subscriptions(endpoint = desktop.store.settings.value.endpoint) }.isSuccess)
+
+        val code = Invites.newCode()
+        val invited = async(Dispatchers.IO) { laptop.room.invite(code = code) }
+        delay(1_500)
+        val guest = Device(dir = File(root, "guest").apply { mkdirs() })
+        assertTrue(Setup(store = guest.store).join(input = "$localServer/$code").isNotEmpty())
+        assertEquals(fresh.room, guest.store.settings.value.room)
+        assertTrue(withTimeout(TIMEOUT_MS) { invited.await() }.orEmpty().isNotEmpty())
+        guest.room.start()
+        waitFor("the guest is online in the new room") { guest.room.connected.value }
+        guest.clipboard.copy(Clip.Text("hello in the new room"))
+        waitFor("text arrives in the new room") { (laptop.clipboard.current as? Clip.Text)?.text == "hello in the new room" }
+        delay(1_500)
+        assertNotEquals("the old room hears nothing", "hello in the new room", (desktop.clipboard.current as? Clip.Text)?.text)
+
+        val dead = SettingsStore(file = File(root, "dead.json")).apply { update { fresh.copy(token = "tk_0000000000000000000000000000x", own = "") } }
+        val stopped = runCatching { Setup(store = dead).createNewRoom() }.exceptionOrNull()
+        assertTrue("a refused token asks for the server token: $stopped", stopped is TokenRefusedException)
+        assertEquals(fresh.room, dead.settings.value.room)
+        log("new room ok")
+
+        laptop.room.stop()
+        desktop.room.stop()
+        guest.room.stop()
+        root.deleteRecursively()
+        Unit
+    }
+
     private suspend fun waitFor(what: String, check: () -> Boolean) {
         withTimeout(TIMEOUT_MS) { while (!check()) delay(100) }
         log("ok $what")
