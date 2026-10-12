@@ -28,54 +28,51 @@ struct PanelView: View {
     let title: String
     let image: NSImage?
     let note: String
+    var commandNote = ""
     @ObservedObject var model: PanelModel
     let close: () -> Void
+
+    private var both: Bool { image != nil && !commandNote.isEmpty }
 
     var body: some View {
         VStack(spacing: 18) {
             Text(title)
                 .font(.title2.weight(.semibold))
             if let image = image {
-                Image(nsImage: image)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: 240, height: 240)
-                    .padding(16)
-                    .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            }
-            if let command = model.command {
-                HStack(spacing: 10) {
-                    Text(command)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    Spacer(minLength: 0)
-                    Button {
-                        pasteboard.clearContents()
-                        pasteboard.setString(command, forType: .string)
-                        ownCount = pasteboard.changeCount
-                        seenCount = ownCount
-                        model.copied = true
-                    } label: {
-                        Image(systemName: model.copied ? "checkmark" : "doc.on.doc")
-                    }
-                    .help(L("Скопировать команду", "Copy the Command"))
-                    .modifier(GlassButton(prominent: false))
+                VStack(spacing: 12) {
+                    if both { heading(L("Телефон", "Phone"), symbol: "iphone") }
+                    Image(nsImage: image)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: both ? 190 : 240, height: both ? 190 : 240)
+                        .padding(both ? 12 : 16)
+                        .background(Color.white, in: RoundedRectangle(cornerRadius: both ? 20 : 24, style: .continuous))
+                    noteText(note)
                 }
-                .padding(.leading, 14)
-                .padding(.trailing, 6)
-                .padding(.vertical, 6)
-                .modifier(GlassCard())
             }
-            Text(note)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            if !commandNote.isEmpty {
+                Divider()
+                VStack(spacing: 12) {
+                    heading(L("Компьютер", "Computer"), symbol: "laptopcomputer")
+                    if let command = model.command {
+                        commandCard(command)
+                        noteText(commandNote)
+                    } else if !model.isFailed {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            } else if let command = model.command {
+                commandCard(command)
+            }
+            if image == nil {
+                noteText(note)
+            }
             Label(model.status, systemImage: model.isDone ? "checkmark.circle.fill" : model.isFailed ? "exclamationmark.triangle.fill" : "hourglass")
                 .font(.callout.weight(.medium))
                 .foregroundStyle(model.isDone ? Color.green : model.isFailed ? Color.orange : Color.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .animation(.default, value: model.isDone)
             Button(model.isDone ? L("Готово", "Done") : L("Закрыть", "Close"), action: close)
                 .keyboardShortcut(.defaultAction)
@@ -85,7 +82,46 @@ struct PanelView: View {
         .padding(.horizontal, 28)
         .padding(.top, 34)
         .padding(.bottom, 24)
-        .frame(width: 380)
+        .frame(width: both ? 430 : 380)
+    }
+
+    private func heading(_ text: String, symbol: String) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.headline)
+    }
+
+    private func noteText(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func commandCard(_ command: String) -> some View {
+        HStack(spacing: 10) {
+            Text(command)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Spacer(minLength: 0)
+            Button {
+                pasteboard.clearContents()
+                pasteboard.setString(command, forType: .string)
+                ownCount = pasteboard.changeCount
+                seenCount = ownCount
+                model.copied = true
+            } label: {
+                Image(systemName: model.copied ? "checkmark" : "doc.on.doc")
+            }
+            .help(L("Скопировать команду", "Copy the Command"))
+            .modifier(GlassButton(prominent: false))
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .modifier(GlassCard())
     }
 }
 

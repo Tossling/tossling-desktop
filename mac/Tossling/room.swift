@@ -178,18 +178,22 @@ func memberKey(_ info: [String: Any]) -> String? {
     return text
 }
 
-func createToken(label: String) -> String? {
-    var r = request("v1/account/token", method: "POST")
+func mintToken(server: String, token: String, label: String) -> (code: Int, token: String?) {
+    var r = serverRequest(server, "v1/account/token", method: "POST", token: token)
     r.setValue("application/json", forHTTPHeaderField: "Content-Type")
     r.httpBody = try? JSONSerialization.data(withJSONObject: ["label": label, "expires": 0])
     r.timeoutInterval = 20
     let (code, body) = runSync(r)
     guard code == 200, let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
-          let token = json["token"] as? String, !token.isEmpty else {
+          let minted = json["token"] as? String, !minted.isEmpty else {
         log(L("не выпустил новый токен: HTTP \(code)", "could not issue a new token: HTTP \(code)"))
-        return nil
+        return (code, nil)
     }
-    return token
+    return (code, minted)
+}
+
+func createToken(label: String) -> String? {
+    mintToken(server: conf.server, token: conf.authToken, label: label).token
 }
 
 func retireTokens() {

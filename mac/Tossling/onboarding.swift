@@ -20,8 +20,8 @@ func normalizedServer(_ text: String) -> String {
     return value
 }
 
-func checkServer(_ server: String, token: String, done: @escaping (String?, String) -> Void) {
-    guard let url = URL(string: server + "/v1/account") else { return done(L("Не понял адрес сервера", "Could not read the server address"), "") }
+func checkServer(_ server: String, token: String, done: @escaping (String?, String, Int) -> Void) {
+    guard let url = URL(string: server + "/v1/account") else { return done(L("Не понял адрес сервера", "Could not read the server address"), "", 0) }
     var request = URLRequest(url: url, timeoutInterval: 15)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     fetch(request) { data, response, error in
@@ -36,7 +36,7 @@ func checkServer(_ server: String, token: String, done: @escaping (String?, Stri
         }
         DispatchQueue.global(qos: .userInitiated).async {
             let prefix = problem == nil ? channelPrefix(server) : ""
-            DispatchQueue.main.async { done(problem, prefix) }
+            DispatchQueue.main.async { done(problem, prefix, code) }
         }
     }
 }
@@ -46,7 +46,8 @@ func writeNewConfig(_ values: [String: Any], to path: String) -> Bool {
     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     var merged = values
     if let data = FileManager.default.contents(atPath: path), let old = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-        for key in ["name", "aliases", "identity", "language", "device_id"] where merged[key] == nil {
+        for key in ["name", "aliases", "identity", "language", "device_id", "auto", "hotkey", "hotkey_keys", "screenshots",
+                    "notifications", "alert_topics", "notify_app"] where merged[key] == nil {
             merged[key] = old[key]
         }
     }
@@ -61,6 +62,13 @@ func newRoom(server: String, token: String, deviceID: String, prefix: String) ->
     _ = key.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
     return ["server": server, "token": token, "room": prefix + hex(12), "key": key.base64EncodedString(),
             "device_id": deviceID, "owner": deviceID, "legacy_to_mac": "", "legacy_to_phone": "", "images": true]
+}
+
+func createRoom(server: String, token: String, prefix: String, config path: String, extra: [String: Any] = [:], done: @escaping (Bool) -> Void) {
+    leaveOwnToken(config: path) {
+        let room = newRoom(server: server, token: token, deviceID: existingDeviceID(path), prefix: prefix).merging(extra) { $1 }
+        done(writeNewConfig(room, to: path))
+    }
 }
 
 func existingDeviceID(_ path: String) -> String {
@@ -131,14 +139,14 @@ final class OnboardingModel: ObservableObject {
         problem = ""
         status = L("Проверяю сервер…", "Checking the server…")
         step = .working
-        checkServer(address, token: key) { [self] trouble, prefix in
+        checkServer(address, token: key) { [self] trouble, prefix, _ in
             if let trouble = trouble {
                 problem = trouble
                 step = .server
                 return
             }
-            leaveOwnToken(config: configPath) { [self] in
-                guard writeNewConfig(newRoom(server: address, token: key, deviceID: existingDeviceID(configPath), prefix: prefix), to: configPath) else {
+            createRoom(server: address, token: key, prefix: prefix, config: configPath) { [self] saved in
+                guard saved else {
                     problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")
                     step = .server
                     return
@@ -260,7 +268,7 @@ struct OnboardingView: View {
                 }
                 .controlSize(.large)
             case .join:
-                Text(L("На компьютере, который уже в комнате: меню Tossling → Устройства → Пригласить компьютер. Вставь сюда код.", "On a computer already in the room: the Tossling menu → Devices → Invite a Computer. Paste the code here."))
+                Text(L("На компьютере, который уже в комнате, открой меню Tossling → Устройства → Добавить устройство. Вставь сюда код.", "On a computer already in the room open the Tossling menu → Devices → Add a Device. Paste the code here."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

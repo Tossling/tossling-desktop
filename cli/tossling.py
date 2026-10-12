@@ -109,7 +109,7 @@ def auth(conf):
 def not_configured():
     c = read_conf()
     if c.get("server") and c.get("token"):
-        return (t("Этот Mac не в комнате: его отключили с другого устройства или настройки сброшены.\n" "Вернуться: tossling setup --new — новая комната и QR для телефона,\n" "или tossling join <код> — в комнату другого компьютера (код дает tossling invite или Устройства → Пригласить компьютер).", "This Mac is not in a room: another device disconnected it or the settings were reset.\n" "Come back with tossling setup --new (a new room and a QR code for the phone)\n" "or tossling join <code> (the room of another computer; tossling invite or Devices → Invite a Computer there gives the code)."))
+        return (t("Этот Mac не в комнате: его отключили с другого устройства или настройки сброшены.\n" "Вернуться: tossling setup --new — новая комната и QR для телефона,\n" "или tossling join <код> — в комнату другого компьютера (код дает tossling invite или Устройства → Добавить устройство).", "This Mac is not in a room: another device disconnected it or the settings were reset.\n" "Come back with tossling setup --new (a new room and a QR code for the phone)\n" "or tossling join <code> (the room of another computer; tossling invite or Devices → Add a Device there gives the code)."))
     return t("Сначала tossling setup <сервер>", "Run tossling setup <server> first")
 
 

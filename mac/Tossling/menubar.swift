@@ -74,7 +74,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         let refused = refusal
         menu.addItem(info(statusLine(), symbol: refused != nil ? "exclamationmark.triangle" : connected ? (isPaused ? "pause.circle" : "checkmark.circle") : "wifi.exclamationmark"))
         if refused == .token {
-            menu.addItem(ActionItem(L("Подключить к комнате заново…", "Connect to the Room Again…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
+            menu.addItem(ActionItem(L("Новая комната…", "New Room…"), symbol: "plus.circle") { [weak self] in self?.askNewRoom() })
+            menu.addItem(ActionItem(L("Войти в другую комнату…", "Join Another Room…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
         }
         menu.addItem(.separator())
         addHistory(to: menu)
@@ -255,8 +256,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         self_.attributedTitle = styled(conf.deviceName, conf.isOwner ? L("этот Mac · создатель комнаты", "this Mac · created the room") : L("этот Mac", "this Mac"))
         menu.addItem(self_)
         menu.addItem(.separator())
-        menu.addItem(ActionItem(L("Подключить телефон…", "Connect a Phone…"), symbol: "qrcode") { [weak self] in self?.showQR() })
-        menu.addItem(ActionItem(L("Пригласить компьютер…", "Invite a Computer…"), symbol: "person.badge.plus") { [weak self] in self?.showInvite() })
+        menu.addItem(ActionItem(L("Добавить устройство…", "Add a Device…"), symbol: "person.badge.plus") { [weak self] in self?.showAddDevice() })
+        menu.addItem(ActionItem(L("Новая комната…", "New Room…"), symbol: "plus.circle") { [weak self] in self?.askNewRoom() })
         menu.addItem(ActionItem(L("Войти в другую комнату…", "Join Another Room…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
         return menu
     }
@@ -281,6 +282,10 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             return menu
         }
         menu.addItem(.separator())
+        guard refusal != .token else {
+            menu.addItem(info(L("Отключить нельзя, сервер не принимает токен этого Mac", "Cannot disconnect while the server refuses this Mac's token")))
+            return menu
+        }
         menu.addItem(ActionItem(L("Отключить от комнаты…", "Disconnect from the Room…")) { [weak self] in
             self?.confirm(L("Отключить \(name)?", "Disconnect \(name)?"),
                           L("Комната получит новый ключ, а при поддержке сервера и новый токен. \(name) больше не увидит буфер, пока его не подключат заново.", "The room gets a new key, and a new token where the server allows it. \(name) will not see the clipboard until it is paired again."),
@@ -494,10 +499,10 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         if alert.runModal() == .alertFirstButtonReturn { done() }
     }
 
-    private func showPanel(title: String, image: NSImage?, note: String, status: String) -> PanelModel {
+    private func showPanel(title: String, image: NSImage?, note: String, commandNote: String = "", status: String) -> PanelModel {
         closePanel()
         let model = PanelModel(status: status)
-        let panel = makePanelWindow(PanelView(title: title, image: image, note: note, model: model) { [weak self] in self?.closePanel() })
+        let panel = makePanelWindow(PanelView(title: title, image: image, note: note, commandNote: commandNote, model: model) { [weak self] in self?.closePanel() })
         panel.title = title
         panel.delegate = self
         panel.center()
@@ -530,38 +535,33 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         panel = nil
     }
 
-    private func showQR() {
+    func showAddDevice() {
         guard let png = pairingQR(), let image = NSImage(data: png) else {
             notify(L("Не собрал QR-код", "Could not make the QR code"))
             return
         }
-        _ = showPanel(title: L("Подключить телефон", "Connect a Phone"), image: image,
-                      note: L("Открой Tossling на телефоне и отсканируй этот код. В нем ключ комнаты и токен, не показывай его посторонним.", "Open Tossling on the phone and scan this code. It holds the room key and the token, do not show it to others."),
-                      status: L("Жду телефон…", "Waiting for the phone…"))
-        waitsForPhone = true
-    }
-
-    private func showInvite() {
         let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
         let raw = String((0..<8).map { _ in alphabet[Int.random(in: 0..<alphabet.count)] })
         let code = "\(raw.prefix(4))-\(raw.suffix(4))"
         let host = conf.server.components(separatedBy: "://").last ?? conf.server
         let command = "tossling join \(host)/\(code)"
-        let model = showPanel(title: L("Пригласить компьютер", "Invite a Computer"), image: nil,
-                              note: L("На другом Маке выполни эту команду. На Windows и Linux выбери в Tossling Войти в другую комнату и вставь \(host)/\(code). Код действует 10 минут, никому его не показывай.", "Run this command on another Mac. On Windows and Linux choose Join Another Room in Tossling and paste \(host)/\(code). The code works for 10 minutes, do not show it to anyone."),
+        let model = showPanel(title: L("Добавить устройство", "Add a Device"), image: image,
+                              note: L("Открой Tossling на телефоне и отсканируй этот код. В нем ключ комнаты и токен, не показывай его посторонним.", "Open Tossling on the phone and scan this code. It holds the room key and the token, do not show it to others."),
+                              commandNote: L("На другом Маке выполни эту команду. На Windows и Linux выбери в Tossling \"Войти в другую комнату…\" и вставь \(host)/\(code). Код действует 10 минут, никому его не показывай.", "Run this command on another Mac. On Windows and Linux choose \"Join Another Room…\" in Tossling and paste \(host)/\(code). The code works for 10 minutes, do not show it to anyone."),
                               status: L("Готовлю приглашение…", "Preparing the invite…"))
+        waitsForPhone = true
         var lines = 0
         inviteProcess = helperCommand(["--invite", code], output: { line in
             lines += 1
             if lines == 1 {
                 guard line == "ok" else {
-                    model.failed(L("Не отправил приглашение: \(line)", "Could not send the invite: \(line)"))
+                    if !model.isDone { model.failed(L("Приглашение для компьютера не ушло (\(line)). Телефон подключится по QR-коду.", "The invite for a computer did not go out (\(line)). A phone can still pair with the QR code.")) }
                     return
                 }
                 model.command = command
-                model.status = L("Жду другой компьютер…", "Waiting for the other computer…")
+                if !model.isDone { model.status = L("Жду телефон или компьютер…", "Waiting for a phone or a computer…") }
             } else if line == "timeout" {
-                model.failed(L("За 10 минут никто не подключился", "Nobody joined within 10 minutes"))
+                if !model.isDone { model.failed(L("За 10 минут компьютер не подключился. Телефон подключится по QR-коду.", "No computer joined within 10 minutes. A phone can still pair with the QR code.")) }
             } else {
                 model.done(L("\(line) в комнате", "\(line) is in the room"))
             }
@@ -570,8 +570,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private func showJoin() {
         ask(L("Войти в другую комнату", "Join Another Room"), value: "",
-            note: L("На компьютере, который уже в комнате: Устройства → Пригласить компьютер (на Маке еще tossling invite). Вставь код вида tossling.example.com/ABCD-EFGH. Этот Mac перейдет в ту комнату.",
-                    "On a computer that is already in the room: Devices → Invite a Computer (on a Mac also tossling invite). Paste the code like tossling.example.com/ABCD-EFGH. This Mac moves to that room."),
+            note: L("На компьютере, который уже в комнате, выбери Устройства → Добавить устройство (на Маке еще tossling invite). Вставь код вида tossling.example.com/ABCD-EFGH. Этот Mac перейдет в ту комнату.",
+                    "On a computer that is already in the room choose Devices → Add a Device (on a Mac also tossling invite). Paste the code like tossling.example.com/ABCD-EFGH. This Mac moves to that room."),
             button: L("Войти", "Join")) { [weak self] text in self?.join(text) }
     }
 
@@ -618,6 +618,107 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                 model.done(L("Этот Mac в комнате с \(answer). Перезапускаюсь…", "This Mac is in the room with \(answer). Restarting…"))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { restartAgent() }
             }
+        }
+    }
+
+    private func askNewRoom() {
+        let host = conf.server.components(separatedBy: "://").last ?? conf.server
+        confirm(L("Создать новую комнату?", "Create a new room?"),
+                L("Этот Mac выйдет из текущей комнаты и создаст новую на \(host). Остальные устройства останутся в старой комнате, пока ты не добавишь их в новую.",
+                  "This Mac leaves the current room and creates a new one on \(host). The other devices stay in the old room until you add them to the new one."),
+                button: L("Создать", "Create")) { [weak self] in self?.startNewRoom() }
+    }
+
+    private func newRoomPanel(_ status: String) -> PanelModel {
+        showPanel(title: L("Новая комната", "New Room"), image: nil,
+                  note: L("Этот Mac выходит из прежней комнаты. Когда новая будет готова, Tossling перезапустится и покажет, как добавить устройства.",
+                          "This Mac leaves its old room. When the new one is ready, Tossling restarts and shows how to add the devices."),
+                  status: status)
+    }
+
+    private func startNewRoom() {
+        let server = conf.server
+        let token = conf.authToken
+        let model = newRoomPanel(L("Проверяю сервер…", "Checking the server…"))
+        checkServer(server, token: token) { [weak self] trouble, prefix, code in
+            guard let self = self else { return }
+            if code == 401 || code == 403 {
+                if self.panelModel === model { self.closePanel() }
+                self.askServerToken(server: server, token: "", problem: "")
+                return
+            }
+            if let trouble = trouble { return model.failed(trouble) }
+            model.status = L("Создаю комнату…", "Creating the room…")
+            DispatchQueue.global(qos: .userInitiated).async {
+                let minted = mintToken(server: server, token: token, label: "tossling")
+                DispatchQueue.main.async {
+                    if let fresh = minted.token { return self.finishNewRoom(model, server: server, token: fresh, prefix: prefix) }
+                    switch minted.code {
+                    case 409: model.failed(L("Сервер заполнен, на нем уже 60 токенов. Удали ненужные в панели сервера в разделе Безопасность.",
+                                             "The server is full, it already keeps 60 tokens. Remove unused ones under Security in the server panel."))
+                    case 401, 403:
+                        if self.panelModel === model { self.closePanel() }
+                        self.askServerToken(server: server, token: "", problem: "")
+                    case 429: model.failed(Refusal.address.text)
+                    case 0: model.failed(L("Нет связи с сервером", "No connection to the server"))
+                    default: model.failed(L("Сервер не выдал токен для комнаты, HTTP \(minted.code)", "The server did not issue a token for the room, HTTP \(minted.code)"))
+                    }
+                }
+            }
+        }
+    }
+
+    private func askServerToken(server: String, token: String, problem: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = L("Сервер не принимает токен этого Mac", "The server refuses this Mac's token")
+        alert.informativeText = (problem.isEmpty ? "" : problem + ". ")
+            + L("Новую комнату можно создать с токеном сервера. Он есть на странице настройки сервера и в его панели в разделе Безопасность.",
+                "A new room can be created with the server token. It is on the server's setup page and under Security in its panel.")
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 96))
+        let addressLabel = NSTextField(labelWithString: L("Адрес сервера", "Server address"))
+        addressLabel.frame = NSRect(x: 0, y: 78, width: 300, height: 16)
+        let address = NSTextField(frame: NSRect(x: 0, y: 50, width: 300, height: 24))
+        address.stringValue = server
+        address.placeholderString = "https://tossling.example.com"
+        let tokenLabel = NSTextField(labelWithString: L("Токен", "Token"))
+        tokenLabel.frame = NSRect(x: 0, y: 28, width: 300, height: 16)
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = token
+        field.placeholderString = "tk_…"
+        [addressLabel, address, tokenLabel, field].forEach(box.addSubview)
+        alert.accessoryView = box
+        alert.addButton(withTitle: L("Создать", "Create"))
+        alert.addButton(withTitle: L("Отмена", "Cancel"))
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let target = normalizedServer(address.stringValue)
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty, !key.isEmpty else {
+            return askServerToken(server: address.stringValue, token: key, problem: L("Нужны адрес сервера и токен", "The server address and the token are needed"))
+        }
+        let model = newRoomPanel(L("Проверяю токен…", "Checking the token…"))
+        checkServer(target, token: key) { [weak self] trouble, prefix, code in
+            guard let self = self else { return }
+            if code == 401 || code == 403 {
+                if self.panelModel === model { self.closePanel() }
+                return self.askServerToken(server: target, token: "", problem: trouble ?? "")
+            }
+            if let trouble = trouble { return model.failed(trouble) }
+            self.finishNewRoom(model, server: target, token: key, prefix: prefix)
+        }
+    }
+
+    private func finishNewRoom(_ model: PanelModel, server: String, token: String, prefix: String) {
+        model.status = L("Создаю комнату…", "Creating the room…")
+        createRoom(server: server, token: token, prefix: prefix, config: configFile, extra: ["add_device": true]) { saved in
+            guard saved else { return model.failed(L("Не записал настройки в \(configFile)", "Could not save the settings to \(configFile)")) }
+            members = [:]
+            lastID = ""
+            writeState()
+            log(L("создал новую комнату на \(trimmedServer(server))", "created a new room on \(trimmedServer(server))"))
+            model.done(L("Новая комната готова. Перезапускаюсь…", "The new room is ready. Restarting…"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { restartAgent() }
         }
     }
 

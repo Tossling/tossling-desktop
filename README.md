@@ -100,23 +100,25 @@ codes and invites, and a removal replaces it. `tossling status` says which one t
 ## The phone
 
 Install Tossling on the phone, tap "Pair with a Mac" and scan the QR code that `tossling setup` (or later
-`tossling pair`) shows. The QR code carries the room key and the token, so do not share it or take a screenshot of it.
+`tossling pair`, or Devices, then Add a Device in the menu) shows. The QR code carries the room key and the token, so
+do not share it or take a screenshot of it.
 
 ## Another computer
 
-On a computer that is already in the room choose Devices, then Invite a Computer in the menu, or run `tossling invite`
-on a Mac. It shows something like `tossling join tossling.example.com/ABCD-EFGH`. Within 10 minutes run that on the new
-Mac, or on Windows and Linux choose Join Another Room and paste `tossling.example.com/ABCD-EFGH`. The invite is never
-stored on the server. The inviting computer keeps sending it uncached while it waits, and the room key inside is
-encrypted with the code (PBKDF2 and AES-GCM).
+On a computer that is already in the room choose Devices, then Add a Device in the menu (the same window shows the QR
+code for a phone), or run `tossling invite` on a Mac. Either shows something like
+`tossling join tossling.example.com/ABCD-EFGH`. Within 10 minutes run that on the new Mac, or on Windows and Linux
+choose Join Another Room and paste `tossling.example.com/ABCD-EFGH`. The invite is never stored on the server. The
+inviting computer keeps sending it uncached while it waits, and the room key inside is encrypted with the code (PBKDF2
+and AES-GCM).
 
 ## On a completely different Mac
 
 A short checklist for a Mac that has never seen Tossling.
 
 1. Install `Tossling.app` from Releases or with `brew install --cask tossling/tap/tossling` and open it.
-2. To share the room you already have, run `tossling invite` on a Mac in it (or use Devices, then Invite a Computer in
-   the menu). In the first-run window choose "Join another computer's room" and enter that code. For a new room choose
+2. To share the room you already have, run `tossling invite` on a Mac in it (or use Devices, then Add a Device in the
+   menu). In the first-run window choose "Join another computer's room" and enter that code. For a new room choose
    "Connect my server" and enter the address and the token from the server's setup page. The server panel can issue a
    new setup link.
 3. Allow Tossling in Login Items when macOS asks, and allow notifications.
@@ -134,7 +136,7 @@ A short checklist for a Mac that has never seen Tossling.
 </p>
 
 On Windows and Linux Tossling sits in the tray. It joins a room with an invite from another computer (Devices, then
-Invite a Computer, or `tossling invite` on a Mac), or creates a room on your server and shows the QR code for the phone.
+Add a Device, or `tossling invite` on a Mac), or creates a room on your server and shows the QR code for the phone.
 Text, images, files and folders (as a zip) go both ways, and passwords marked by password managers are skipped. Updates
 come from a feed signed with the same Ed25519 key as the Mac appcast.
 
@@ -223,9 +225,11 @@ something. A paused Mac does not send but still receives.
 
 The server answered 401 to this Mac's token, so the token was deleted or has expired. Tossling stops asking the server
 with that token: it tries again after 1 minute, then 2, 4, 8, 16 and every 30 minutes, so the server does not block the
-whole network for failed logins. Connect the Mac to the room again: choose Connect to the Room Again in the menu (the
-same as Devices → Join Another Room) and paste a code from another computer, or run `tossling join`. When the server
-answers 429 (too many requests from the network), Tossling waits the same way for every token.
+whole network for failed logins, and other devices cannot be disconnected from this Mac. To get the Mac going again
+choose New Room in the menu (the same as Devices → New Room): it asks for the server token from the setup page or from
+Security in the server panel and creates a new room, then shows how to add the other devices. Or choose Join Another
+Room and paste a code from another computer, or run `tossling join`. When the server answers 429 (too many requests
+from the network), Tossling waits the same way for every token.
 
 ### What I copy on an iPhone or iPad does not reach the phone
 

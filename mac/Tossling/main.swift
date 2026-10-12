@@ -291,6 +291,19 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("own token: not asked again", newer.fetch(config: ownFile, name: "Studio") == nil && issued.count == 1)
     try? JSONSerialization.data(withJSONObject: roomConfig.merging(["token": "tk_rotated"]) { $1 }).write(to: URL(fileURLWithPath: ownFile))
     check("own token: not kept for a config that changed meanwhile", found.map { OwnToken.keep($0, config: ownFile) } == false && readConfigFile(ownFile)?["own"] == nil)
+    let roomFile = scratch.appendingPathComponent("room.json").path
+    let oldRoom: [String: Any] = ["server": "https://a.example", "token": "tk_old", "room": "tossling-a", "key": "k1", "device_id": "d1", "owner": "d0",
+                                  "name": "Studio", "aliases": ["d2": "Phone"], "auto": false, "hotkey_keys": "shift-cmd-c", "retire": [["t": "tk_gone"]]]
+    try? JSONSerialization.data(withJSONObject: oldRoom).write(to: URL(fileURLWithPath: roomFile))
+    var created: Bool?
+    createRoom(server: "https://a.example", token: "tk_new", prefix: "tossling-", config: roomFile, extra: ["add_device": true]) { created = $0 }
+    let fresh = readConfigFile(roomFile) ?? [:]
+    check("new room: written with a fresh room and key", created == true && fresh["token"] as? String == "tk_new" && fresh["room"] as? String != "tossling-a"
+          && (fresh["room"] as? String ?? "").hasPrefix("tossling-") && Data(base64Encoded: fresh["key"] as? String ?? "")?.count == 32)
+    check("new room: this Mac owns it and keeps its id, name and settings", fresh["owner"] as? String == "d1" && fresh["device_id"] as? String == "d1"
+          && fresh["name"] as? String == "Studio" && fresh["aliases"] as? [String: String] == ["d2": "Phone"] && fresh["auto"] as? Bool == false
+          && fresh["hotkey_keys"] as? String == "shift-cmd-c" && fresh["retire"] == nil)
+    check("new room: asks for the add device window", fresh["add_device"] as? Bool == true)
     try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
@@ -512,7 +525,7 @@ if !setupServer.isEmpty {
     let wait = DispatchSemaphore(value: 0)
     var trouble: String?
     var prefix = ""
-    checkServer(server, token: token) { problem, found in
+    checkServer(server, token: token) { problem, found, _ in
         trouble = problem
         prefix = found
         wait.signal()
@@ -522,10 +535,10 @@ if !setupServer.isEmpty {
         print(trouble)
         exit(1)
     }
-    var left = false
-    leaveOwnToken(config: configFile) { left = true }
-    while !left { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
-    guard writeNewConfig(newRoom(server: server, token: token, deviceID: existingDeviceID(configFile), prefix: prefix), to: configFile) else {
+    var saved: Bool?
+    createRoom(server: server, token: token, prefix: prefix, config: configFile) { saved = $0 }
+    while saved == nil { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    guard saved == true else {
         print(L("не записал настройки в \(configFile)", "could not save the settings to \(configFile)"))
         exit(1)
     }
@@ -1918,6 +1931,9 @@ Notifier.shared.start()
 _ = History.shared
 Alerts.shared.start()
 StatusMenu.shared.install()
+if readConfigFile(configFile)?["add_device"] as? Bool == true && rewriteConfig({ $0["add_device"] = nil }) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { StatusMenu.shared.showAddDevice() }
+}
 LinkHandler.shared.install()
 ScreenshotWatcher.shared.refresh()
 Updates.shared.start()
