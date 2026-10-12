@@ -626,7 +626,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         confirm(L("Создать новую комнату?", "Create a new room?"),
                 L("Этот Mac выйдет из текущей комнаты и создаст новую на \(host). Остальные устройства останутся в старой комнате, пока ты не добавишь их в новую.",
                   "This Mac leaves the current room and creates a new one on \(host). The other devices stay in the old room until you add them to the new one."),
-                button: L("Создать", "Create")) { [weak self] in self?.startNewRoom() }
+                button: L("Создать", "Create")) { [weak self] in self?.startNewRoom(server: conf.server, token: conf.authToken, typed: false) }
     }
 
     private func newRoomPanel(_ status: String) -> PanelModel {
@@ -636,17 +636,16 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                   status: status)
     }
 
-    private func startNewRoom() {
-        let server = conf.server
-        let token = conf.authToken
-        let model = newRoomPanel(L("Проверяю сервер…", "Checking the server…"))
+    private func startNewRoom(server: String, token: String, typed: Bool) {
+        let model = newRoomPanel(typed ? L("Проверяю токен…", "Checking the token…") : L("Проверяю сервер…", "Checking the server…"))
+        let refused = { [weak self] (problem: String) in
+            guard let self = self else { return }
+            if self.panelModel === model { self.closePanel() }
+            self.askServerToken(server: server, token: "", problem: typed ? problem : "")
+        }
         checkServer(server, token: token) { [weak self] trouble, prefix, code in
             guard let self = self else { return }
-            if code == 401 || code == 403 {
-                if self.panelModel === model { self.closePanel() }
-                self.askServerToken(server: server, token: "", problem: "")
-                return
-            }
+            if code == 401 || code == 403 { return refused(trouble ?? "") }
             if let trouble = trouble { return model.failed(trouble) }
             model.status = L("Создаю комнату…", "Creating the room…")
             DispatchQueue.global(qos: .userInitiated).async {
@@ -656,9 +655,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                     switch minted.code {
                     case 409: model.failed(L("Сервер заполнен, на нем уже 60 токенов. Удали ненужные в панели сервера в разделе Безопасность.",
                                              "The server is full, it already keeps 60 tokens. Remove unused ones under Security in the server panel."))
-                    case 401, 403:
-                        if self.panelModel === model { self.closePanel() }
-                        self.askServerToken(server: server, token: "", problem: "")
+                    case 401, 403: refused(L("Сервер не принял токен", "The server did not accept the token"))
                     case 429: model.failed(Refusal.address.text)
                     case 0: model.failed(L("Нет связи с сервером", "No connection to the server"))
                     default: model.failed(L("Сервер не выдал токен для комнаты, HTTP \(minted.code)", "The server did not issue a token for the room, HTTP \(minted.code)"))
@@ -673,8 +670,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         let alert = NSAlert()
         alert.messageText = L("Сервер не принимает токен этого Mac", "The server refuses this Mac's token")
         alert.informativeText = (problem.isEmpty ? "" : problem + ". ")
-            + L("Новую комнату можно создать с токеном сервера. Он есть на странице настройки сервера и в его панели в разделе Безопасность.",
-                "A new room can be created with the server token. It is on the server's setup page and under Security in its panel.")
+            + L("Новую комнату можно создать с токеном сервера. Он есть на странице настройки сервера. Если ссылка на нее уже не работает, открой панель сервера, раздел Безопасность, и нажми Новая ссылка настройки.",
+                "A new room can be created with the server token. It is on the server's setup page. If the link to it no longer works, open the server panel, Security, and click New setup link.")
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 96))
         let addressLabel = NSTextField(labelWithString: L("Адрес сервера", "Server address"))
         addressLabel.frame = NSRect(x: 0, y: 78, width: 300, height: 16)
@@ -683,7 +680,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         address.placeholderString = "https://tossling.example.com"
         let tokenLabel = NSTextField(labelWithString: L("Токен", "Token"))
         tokenLabel.frame = NSRect(x: 0, y: 28, width: 300, height: 16)
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         field.stringValue = token
         field.placeholderString = "tk_…"
         [addressLabel, address, tokenLabel, field].forEach(box.addSubview)
@@ -697,16 +694,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         guard !target.isEmpty, !key.isEmpty else {
             return askServerToken(server: address.stringValue, token: key, problem: L("Нужны адрес сервера и токен", "The server address and the token are needed"))
         }
-        let model = newRoomPanel(L("Проверяю токен…", "Checking the token…"))
-        checkServer(target, token: key) { [weak self] trouble, prefix, code in
-            guard let self = self else { return }
-            if code == 401 || code == 403 {
-                if self.panelModel === model { self.closePanel() }
-                return self.askServerToken(server: target, token: "", problem: trouble ?? "")
-            }
-            if let trouble = trouble { return model.failed(trouble) }
-            self.finishNewRoom(model, server: target, token: key, prefix: prefix)
-        }
+        startNewRoom(server: target, token: key, typed: true)
     }
 
     private func finishNewRoom(_ model: PanelModel, server: String, token: String, prefix: String) {

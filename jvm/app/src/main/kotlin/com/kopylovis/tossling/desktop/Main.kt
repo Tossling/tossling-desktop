@@ -47,6 +47,7 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.kopylovis.tossling.protocol.ClipKind
+import com.kopylovis.tossling.protocol.Endpoint
 import com.kopylovis.tossling.protocol.Invites
 import com.kopylovis.tossling.protocol.network.ServerRefusal
 import kotlinx.coroutines.CancellationException
@@ -447,8 +448,8 @@ private fun OnboardingWindow(store: SettingsStore, askingToken: Boolean, onDone:
                     Text(
                         text = if (askingToken) {
                             L(
-                                "Чтобы создать новую комнату, вставь токен сервера. Он есть на странице настройки сервера и в разделе Security в его панели. Потом откроется окно, где можно добавить устройства.",
-                                "To create a new room, paste the server token. It is on the server's setup page and under Security in its panel. Then a window opens where you can add devices.",
+                                "Чтобы создать новую комнату, вставь токен сервера. Он есть на странице настройки сервера. Если ссылка на нее уже не работает, открой панель сервера, раздел Безопасность, и нажми Новая ссылка настройки. Потом откроется окно, где можно добавить устройства.",
+                                "To create a new room, paste the server token. It is on the server's setup page. If the link to it no longer works, open the server panel, Security, and click New setup link. Then a window opens where you can add devices.",
                             )
                         } else {
                             L(
@@ -471,9 +472,15 @@ private fun OnboardingWindow(store: SettingsStore, askingToken: Boolean, onDone:
                             problem = null
                             work = scope.launch {
                                 try {
-                                    if (tab == 0) onDone(setup.join(input = invite)) else setup.createRoom(address = server, token = token).also { onDone(null) }
+                                    when {
+                                        tab == 0 -> onDone(setup.join(input = invite))
+                                        askingToken -> setup.createNewRoom(endpoint = Endpoint(server = Setup.serverOf(server), token = token.trim())).also { onDone(null) }
+                                        else -> setup.createRoom(address = server, token = token).also { onDone(null) }
+                                    }
                                 } catch (error: CancellationException) {
                                     problem = null
+                                } catch (error: TokenRefusedException) {
+                                    problem = L("Сервер не принял токен", "The server did not accept the token")
                                 } catch (error: SetupException) {
                                     problem = error.message
                                 } catch (error: Exception) {

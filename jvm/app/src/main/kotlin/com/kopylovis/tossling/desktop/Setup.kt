@@ -61,16 +61,14 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
         Log.write("created a room on $server")
     }
 
-    suspend fun createNewRoom() {
-        val current = store.settings.value
-        val endpoint = current.endpoint
+    suspend fun createNewRoom(endpoint: Endpoint = store.settings.value.endpoint) {
         val token = try {
             client.subscriptions(endpoint = endpoint)
             client.createToken(endpoint = endpoint, label = TOKEN_LABEL)
         } catch (error: NtfyException) {
             throw when {
                 serverRefusal(code = error.code, isAccount = true) == ServerRefusal.TOKEN -> TokenRefusedException()
-                error.code == 409 -> SetupException(L("На сервере уже 60 токенов. Удали ненужные в разделе Security в панели сервера и попробуй еще раз.", "The server already keeps 60 tokens. Remove unused ones under Security in the server panel and try again."))
+                error.code == 409 -> SetupException(L("На сервере уже 60 токенов. Удали ненужные в панели сервера в разделе Безопасность и попробуй еще раз.", "The server already keeps 60 tokens. Remove unused ones under Security in the server panel and try again."))
                 error.code == 429 -> SetupException(L("С этой сети слишком много запросов, сервер просит подождать", "Too many requests from this network, the server asks to wait"))
                 else -> SetupException(L("Сервер ответил HTTP ${error.code}", "The server answered HTTP ${error.code}"))
             }
@@ -80,11 +78,11 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
             throw SetupException(L("Нет связи с сервером: ${error.message}", "No connection to the server: ${error.message}"))
         }
         try {
-            createRoom(address = current.server, token = token)
+            createRoom(address = endpoint.server, token = token)
         } catch (error: Throwable) {
             withContext(NonCancellable) {
-                runCatching { client.deleteToken(endpoint = Endpoint(server = current.server, token = token), token = token) }
-                    .onFailure { Log.write("the new room stopped and its token stays on ${current.server}: ${it.message}") }
+                runCatching { client.deleteToken(endpoint = Endpoint(server = endpoint.server, token = token), token = token) }
+                    .onFailure { Log.write("the new room stopped and its token stays on ${endpoint.server}: ${it.message}") }
             }
             throw error
         }
