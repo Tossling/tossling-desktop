@@ -5,7 +5,7 @@
 <h1 align="center">Tossling Desktop</h1>
 
 <p align="center">
-  One clipboard for your computers and Android phone, through your own server.<br>
+  One clipboard for your computers and phones, through your own server.<br>
   Copy on one device and paste on another a second later. Everything is encrypted on the devices.
 </p>
 
@@ -14,7 +14,7 @@
   <img alt="macOS 13 or newer" src="https://img.shields.io/badge/macOS-13%2B-3067B8">
   <img alt="Windows 10 or newer" src="https://img.shields.io/badge/Windows-10%2B-3067B8">
   <img alt="Linux x64 and arm64" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-3067B8">
-  <img alt="iOS in progress" src="https://img.shields.io/badge/iOS-in%20progress-8A8F98">
+  <img alt="iOS coming soon" src="https://img.shields.io/badge/iOS-coming%20soon-8A8F98">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-3067B8"></a>
 </p>
 
@@ -30,7 +30,7 @@ relays ciphertext.
 This repository holds the desktop apps. On macOS it is a menu bar helper (`Tossling.app`) with the `tossling` command and
 a Finder extension. On Windows and Linux it is a tray app, see [Windows and Linux](#windows-and-linux). The Android app
 lives in [tossling/tossling-mobile](https://github.com/tossling/tossling-mobile) and the server in
-[tossling/tossling-server](https://github.com/tossling/tossling-server). An iOS app is in progress.
+[tossling/tossling-server](https://github.com/tossling/tossling-server). The iOS app lives in the same mobile repository and is coming to the App Store.
 
 To see the phone side before setting anything up, install the Android app and tap Try without a computer, or open
 [tossling-demo.monoroh.com/demo](https://tossling-demo.monoroh.com/demo). A demo computer shares a room with the phone
@@ -99,7 +99,7 @@ codes and invites, and a removal replaces it. `tossling status` says which one t
 
 ## The phone
 
-Install Tossling on the phone, tap "Pair with a Mac" and scan the QR code that `tossling setup` (or later
+Install Tossling on the phone, tap "Pair with a computer" and scan the QR code that `tossling setup` (or later
 `tossling pair`, or Devices, then Add a Device in the menu) shows. The QR code carries the room key and the token, so
 do not share it or take a screenshot of it.
 
