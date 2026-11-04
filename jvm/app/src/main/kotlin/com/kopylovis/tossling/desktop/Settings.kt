@@ -60,6 +60,8 @@ data class RoomState(
     val room: String = "",
     @SerialName("last_id") val lastId: String = "",
     val handled: List<String> = emptyList(),
+    /** The `mid`s handled in the last 3 hours, as [com.kopylovis.tossling.protocol.HandledMessages] encodes them. */
+    val mids: String = "",
     val members: Map<String, Member> = emptyMap(),
 )
 

@@ -2,6 +2,8 @@ package com.kopylovis.tossling.desktop
 
 import com.kopylovis.tossling.protocol.ClipMeta
 import com.kopylovis.tossling.protocol.Endpoint
+import com.kopylovis.tossling.protocol.Freshness
+import com.kopylovis.tossling.protocol.HandledMessages
 import com.kopylovis.tossling.protocol.Invite
 import com.kopylovis.tossling.protocol.Invites
 import com.kopylovis.tossling.protocol.Member
@@ -9,6 +11,7 @@ import com.kopylovis.tossling.protocol.OLD_ROOM_PREFIX
 import com.kopylovis.tossling.protocol.ROOM_PREFIX
 import com.kopylovis.tossling.protocol.SyncJson
 import com.kopylovis.tossling.protocol.acceptsServerMove
+import com.kopylovis.tossling.protocol.newMessageId
 import com.kopylovis.tossling.protocol.crypto.ClipCipher
 import com.kopylovis.tossling.protocol.crypto.DeviceIdentity
 import com.kopylovis.tossling.protocol.crypto.RoomKeys
@@ -379,17 +382,36 @@ class Room(
         }
         if (meta.sender.isNotEmpty() && meta.sender == conf.deviceId) return
         if (meta.to?.contains(conf.deviceId) == false) return
+        val mid = meta.messageId
+        if (mid != null) {
+            var replay = false
+            state.update { current ->
+                val mids = afterMessage(handled = current.mids, mid = mid, nowMs = now())
+                replay = mids == null
+                if (mids == null) current else current.copy(mids = mids)
+            }
+            if (replay) {
+                Log.write("skipped the message $mid: it was handled already")
+                return
+            }
+        }
         val age = now() / 1000 - event.time
+        val contentAge = Freshness.ageMs(eventTime = event.time, sentAt = meta.sentAt, nowMs = now())
+        val fresh = contentAge < Freshness.STALE_MS
         val kind = meta.kind
         val from = shownName(meta)
         if (age >= STALE_SECONDS && kind !in setOf(ClipMeta.BYE, ClipMeta.REKEY, ClipMeta.KICK, ClipMeta.FILE)) return
-        if (kind == ClipMeta.FILE && age >= FILE_STALE_SECONDS) {
+        if ((kind == ClipMeta.TEXT || kind == ClipMeta.IMAGE) && !fresh) {
+            Log.write("skipped $kind from $from: sealed too long ago")
+            return
+        }
+        if (kind == ClipMeta.FILE && contentAge >= Freshness.FILE_STALE_MS) {
             notifier.notify(L("Не получил «${meta.fileName ?: "file"}» от $from: сервер его уже удалил", "Did not receive «${meta.fileName ?: "file"}» from $from: the server has already deleted it"))
             return
         }
         when (kind) {
             ClipMeta.PING -> {
-                remember(meta = meta, time = event.time)
+                remember(meta = meta, time = event.time, fresh = fresh)
                 if (meta.sender.isNotEmpty()) runCatching { publishControl(kind = ClipMeta.HELLO, to = listOf(meta.sender)) }
                 return
             }
@@ -403,7 +425,7 @@ class Room(
             ClipMeta.REKEY -> return rekey(meta = meta, from = from)
             ClipMeta.KICK -> return kicked(from = from)
         }
-        val isNew = remember(meta = meta, time = event.time)
+        val isNew = remember(meta = meta, time = event.time, fresh = fresh)
         if (kind == ClipMeta.HELLO) {
             meta.invite?.let { topic -> invitation?.takeIf { it.first == topic }?.second?.complete(from) }
             if (isNew) {
@@ -424,7 +446,7 @@ class Room(
                 apply(clip = Clip.Image(bytes = bytes, mime = meta.mime), from = from)
             }
 
-            ClipMeta.FILE -> receiveFile(meta = meta, url = url ?: return, cipher = cipher, fresh = age < STALE_SECONDS, from = from)
+            ClipMeta.FILE -> receiveFile(meta = meta, url = url ?: return, cipher = cipher, fresh = fresh, from = from)
             ClipMeta.MOVE -> Unit
             else -> Log.write("an unknown message: $kind")
         }
@@ -574,10 +596,12 @@ class Room(
             is Clip.Image -> L("картинка ${sizeText(clip.bytes.size.toLong())}", "image ${sizeText(clip.bytes.size.toLong())}")
             is Clip.Files -> return@launch
         }
+        // Every try carries the same mid: if an earlier one did get through, receivers drop the repeat.
+        val mid = newMessageId()
         var attempt = 0
         while (true) {
             val failure = try {
-                publishContent(clip)
+                publishContent(clip = clip, mid = mid)
                 null
             } catch (error: CancellationException) {
                 throw error
@@ -609,14 +633,14 @@ class Room(
         }
     }
 
-    private suspend fun publishContent(clip: Clip) {
+    private suspend fun publishContent(clip: Clip, mid: String) {
         val conf = settings
         val cipher = ClipCipher.fromBase64(key = conf.key)
-        val base = ClipMeta(kind = ClipMeta.TEXT, source = Platform.source, device = conf.deviceName, sender = conf.deviceId)
+        val base = ClipMeta(kind = ClipMeta.TEXT, source = Platform.source, device = conf.deviceName, sender = conf.deviceId, messageId = mid)
         when (clip) {
             is Clip.Text -> {
                 val bytes = clip.text.toByteArray()
-                val inline = if (bytes.size <= INLINE_LIMIT) inlineEnvelope(cipher = cipher, meta = base.copy(text = clip.text)) else null
+                val inline = if (bytes.size <= INLINE_LIMIT) inlineEnvelope(cipher = cipher, meta = stamp(meta = base.copy(text = clip.text), nowMs = now())) else null
                 if (inline != null) client.publish(endpoint = conf.endpoint, topic = conf.room, message = inline, body = null)
                 else publish(meta = base, body = cipher.seal(plain = bytes))
             }
@@ -645,7 +669,7 @@ class Room(
         val meta = ClipMeta(kind = ClipMeta.FILE, mime = mime, source = Platform.source, device = conf.deviceName, sender = conf.deviceId, fileName = name, format = ClipCipher.STREAM_FORMAT, size = size)
         if (size >= BIG_FILE) notifier.notify(L("Отправляю «$name» (${sizeText(size)})…", "Sending «$name» (${sizeText(size)})…"))
         try {
-            client.publishStream(endpoint = conf.endpoint, topic = conf.room, message = cipher.sealToText(plain = encode(meta)), length = ClipCipher.sealedSize(size)) { output ->
+            client.publishStream(endpoint = conf.endpoint, topic = conf.room, message = cipher.sealToText(plain = encode(stamp(meta = meta, nowMs = now()))), length = ClipCipher.sealedSize(size)) { output ->
                 file.inputStream().buffered().use { input -> cipher.sealStream(input = input, output = output, size = size) {} }
             }
         } catch (error: CancellationException) {
@@ -687,23 +711,22 @@ class Room(
 
     private suspend fun publish(meta: ClipMeta, body: ByteArray?) {
         val conf = settings
-        client.publish(endpoint = conf.endpoint, topic = conf.room, message = ClipCipher.fromBase64(key = conf.key).sealToText(plain = encode(meta)), body = body)
+        client.publish(endpoint = conf.endpoint, topic = conf.room, message = ClipCipher.fromBase64(key = conf.key).sealToText(plain = encode(stamp(meta = meta, nowMs = now()))), body = body)
     }
 
-    private fun remember(meta: ClipMeta, time: Long): Boolean {
+    private fun remember(meta: ClipMeta, time: Long, fresh: Boolean): Boolean {
         val id = memberId(meta)
-        val offered = meta.publicKey?.takeIf { RoomKeys.decodeKey(it) != null }.orEmpty()
-        val renewed = meta.renewed == true && meta.kind == ClipMeta.HELLO && offered.isNotEmpty()
-        val seen = minOf(now(), time * 1000)
-        var isNew = false
+        var known: Member? = null
+        var member: Member? = null
         state.update { current ->
-            val known = current.members[id]
-            isNew = known == null
-            val pk = if (known == null || known.pk.isEmpty() || renewed) offered else known.pk
-            val member = Member(id = id, name = meta.device.ifEmpty { "?" }, source = meta.source, seen = seen, since = known?.since ?: seen, pk = pk)
-            current.copy(members = current.members + (id to member))
+            known = current.members[id]
+            val next = rememberedMember(known = known, id = id, meta = meta, time = time, nowMs = now(), fresh = fresh)
+            member = next
+            current.copy(members = current.members + (id to next))
         }
-        return isNew
+        val changed = member?.keyChanged ?: 0
+        if (known?.pk?.isNotEmpty() == true && changed > 0 && changed != known?.keyChanged) Log.write("the key of ${shownName(meta)} changed: taken from a fresh hello with re and marked")
+        return known == null
     }
 
     private fun tellRefused(token: String) {
@@ -780,7 +803,6 @@ class Room(
         private const val TOKEN_LABEL = "tossling"
         private const val ROOM_BYTES = 12
         private const val STALE_SECONDS = 15 * 60
-        private const val FILE_STALE_SECONDS = 3 * 60 * 60
         internal const val INLINE_LIMIT = 2_400
         private const val MESSAGE_LIMIT = 4_096
         private const val HANDLED_KEEP = 50
@@ -808,6 +830,35 @@ class Room(
         // events this computer has already handled. Returns the latest handled ids with this one, or null for a repeat.
         internal fun afterHandling(handled: List<String>, id: String, keep: Int = HANDLED_KEEP): List<String>? =
             if (id in handled) null else (handled + id).takeLast(keep)
+
+        /**
+         * The `mid`s handled in the last 3 hours with [mid], or null when [mid] is among them: the server, or anyone
+         * with a token, can publish an old envelope again.
+         */
+        internal fun afterMessage(handled: String, mid: String, nowMs: Long): String? {
+            val mids = HandledMessages.decode(text = handled)
+            if (mids.contains(mid = mid, nowMs = nowMs)) return null
+            mids.add(mid = mid, nowMs = nowMs)
+            return mids.encode()
+        }
+
+        /** The meta as it goes out: sealed now, with a new mid unless it is a retry that keeps the mid of its first try. */
+        internal fun stamp(meta: ClipMeta, nowMs: Long): ClipMeta = meta.copy(sentAt = nowMs, messageId = meta.messageId ?: newMessageId())
+
+        /**
+         * The member after a message from it. A stored key changes only through a fresh `re` hello, since a replayed one
+         * must not bring back an old key, and as any member can send such a hello in another device's name, the change
+         * marks the member "key changed" until the user accepts the key.
+         */
+        internal fun rememberedMember(known: Member?, id: String, meta: ClipMeta, time: Long, nowMs: Long, fresh: Boolean): Member {
+            val offered = meta.publicKey?.takeIf { RoomKeys.decodeKey(it) != null }.orEmpty()
+            val renewed = meta.renewed == true && meta.kind == ClipMeta.HELLO && offered.isNotEmpty() && fresh
+            val seen = minOf(nowMs, time * 1000)
+            val pk = if (known == null || known.pk.isEmpty() || renewed) offered else known.pk
+            val changed = known != null && known.pk.isNotEmpty() && pk != known.pk
+            val keyChanged = if (changed) nowMs else known?.keyChanged ?: 0
+            return Member(id = id, name = meta.device.ifEmpty { "?" }, source = meta.source, seen = seen, since = known?.since ?: seen, pk = pk, keyChanged = keyChanged)
+        }
 
         internal fun inlineEnvelope(cipher: ClipCipher, meta: ClipMeta): String? =
             cipher.sealToText(plain = SyncJson.encodeToString(ClipMeta.serializer(), meta).toByteArray()).takeIf { it.length <= MESSAGE_LIMIT }

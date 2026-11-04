@@ -14,6 +14,7 @@ import com.kopylovis.tossling.protocol.network.NtfyException
 import com.kopylovis.tossling.protocol.network.ServerRefusal
 import com.kopylovis.tossling.protocol.network.serverRefusal
 import com.kopylovis.tossling.protocol.normalizedServer
+import com.kopylovis.tossling.protocol.stamped
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -157,7 +158,7 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
             publicKey = identity.publicText,
             renewed = true,
             invite = topic,
-        )
+        ).stamped()
         runCatching {
             client.publish(endpoint = joined.endpoint, topic = joined.room, message = ClipCipher.fromBase64(key = joined.key).sealToText(plain = SyncJson.encodeToString(ClipMeta.serializer(), hello).toByteArray()), body = null)
         }.onFailure { Log.write("could not say hello to the room: ${it.message}") }
