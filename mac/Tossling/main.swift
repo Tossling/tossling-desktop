@@ -16,6 +16,9 @@ let inlineLimit = 2_400
 let messageLimit = 4_096
 let staleAfter = 15.0 * 60
 let fileStaleAfter = 3.0 * 60 * 60
+let futureSkew = 5.0 * 60
+let midWindow = 3.0 * 60 * 60
+let midKeep = 1_000
 let gone = L("сервер его уже удалил, отправьте ещё раз", "the server has already deleted it, send it again")
 var configFile = ""
 var stateFile = ""
@@ -226,7 +229,8 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
         check(name + " open", opened(v["sealed"] ?? "", key) == plain)
     }
     let inlineKey = SymmetricKey(size: .bits256)
-    let inlineMeta: [String: Any] = ["k": "text", "m": "text/plain", "src": "mac", "n": "Selftest Mac", "id": "0123456789abcdef"]
+    var inlineMeta: [String: Any] = ["k": "text", "m": "text/plain", "src": "mac", "n": "Selftest Mac", "id": "0123456789abcdef"]
+    stampMessage(&inlineMeta)
     check("inline text", sealedInline(inlineMeta, text: String(repeating: "x", count: inlineLimit), key: inlineKey) != nil)
     check("inline text over the message limit after escaping",
           sealedInline(inlineMeta, text: String(repeating: "\"", count: inlineLimit), key: inlineKey) == nil)
@@ -244,6 +248,35 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("a new event is handled", !alreadyHandled("a", in: &seen, keep: 2) && !alreadyHandled("b", in: &seen, keep: 2))
     check("a repeated event is skipped", alreadyHandled("a", in: &seen, keep: 2))
     check("only the latest events are kept", !alreadyHandled("c", in: &seen, keep: 2) && seen == ["b", "c"])
+    var stamped: [String: Any] = ["k": "text"]
+    stampMessage(&stamped, now: 1_791_360_000.5)
+    check("outgoing messages carry ts in ms and a mid", (stamped["ts"] as? Int64) == 1_791_360_000_500 && messageID(stamped["mid"]) != nil)
+    var second: [String: Any] = [:]
+    stampMessage(&second, now: 1_791_360_000.5)
+    check("every message gets its own mid", second["mid"] as? String != stamped["mid"] as? String)
+    check("mid is 16 lowercase hex", messageID("0123456789abcdef") != nil && messageID("0123456789ABCDEF") == nil
+          && messageID("0123456789abcde") == nil && messageID("0123456789abcdeg") == nil && messageID(12) == nil && messageID(nil) == nil)
+    var mids = [String: Double]()
+    let t0 = 1_000_000.0
+    check("a new mid is handled", !seenMessage("a", now: t0, in: &mids, keep: 3) && !seenMessage("b", now: t0 + 1, in: &mids, keep: 3))
+    check("a repeated mid is skipped", seenMessage("a", now: t0 + 2 * 3600, in: &mids, keep: 3))
+    check("a mid is forgotten after 3 hours", !seenMessage("b", now: t0 + 1 + midWindow, in: &mids, keep: 3) && mids["a"] == nil)
+    _ = seenMessage("c", now: t0 + midWindow + 2, in: &mids, keep: 3)
+    _ = seenMessage("d", now: t0 + midWindow + 3, in: &mids, keep: 3)
+    _ = seenMessage("e", now: t0 + midWindow + 4, in: &mids, keep: 3)
+    check("only the latest mids are kept", Set(mids.keys) == ["c", "d", "e"])
+    let base = 2_000_000.0
+    check("age without ts is the event's age", contentAge(eventTime: base - 60, ts: nil, now: base) == 60)
+    check("age is the older of the event and ts", contentAge(eventTime: base - 5, ts: NSNumber(value: (base - 3600) * 1000), now: base) == 3600
+          && contentAge(eventTime: base - 120, ts: NSNumber(value: (base - 10) * 1000), now: base) == 120)
+    check("a replayed envelope stays old", contentAge(eventTime: base, ts: NSNumber(value: (base - staleAfter - 1) * 1000), now: base) >= staleAfter)
+    check("ts a little ahead is fine", contentAge(eventTime: base - 1, ts: NSNumber(value: (base + 60) * 1000), now: base) == 1)
+    check("ts more than 5 minutes ahead is old", contentAge(eventTime: base - 1, ts: NSNumber(value: (base + futureSkew + 1) * 1000), now: base) >= staleAfter)
+    check("ts that is not a number counts as missing", contentAge(eventTime: base - 7, ts: "soon", now: base) == 7)
+    let pkA = Data(repeating: 1, count: 32).base64EncodedString(), pkB = Data(repeating: 2, count: 32).base64EncodedString()
+    check("the first key is kept", storedKey(known: "", offered: pkA, renew: false) == pkA && storedKey(known: pkA, offered: pkB, renew: false) == pkA)
+    check("a fresh re hello changes the key", storedKey(known: pkA, offered: pkB, renew: true) == pkB)
+    check("no key does not erase a known one", storedKey(known: pkA, offered: "", renew: true) == pkA)
     let gateFile = scratch.appendingPathComponent("refusals.json").path
     var now = 1_000_000.0
     let gate = Gate(file: gateFile)
@@ -537,6 +570,7 @@ if !joinCode.isEmpty {
        let target = URL(string: "\(trimmedServer(invite["s"] as? String ?? server))/\(room)") {
         var meta: [String: Any] = ["k": "hello", "m": "text/plain", "src": "mac", "n": joinName.isEmpty ? computerName : joinName, "inv": topic, "re": true]
         if !joinID.isEmpty { meta["id"] = joinID }
+        stampMessage(&meta)
         if let metaJSON = try? JSONSerialization.data(withJSONObject: meta),
            let sealedMeta = try? AES.GCM.seal(metaJSON, using: SymmetricKey(data: roomKey)).combined {
             var hello = URLRequest(url: target)
@@ -804,6 +838,8 @@ var lastID = ""
 // ntfy answers since=<id> with the other messages of that id's second too, so a reconnect can bring back events this
 // Mac has already handled. The ids of the latest ones are kept (and saved) to skip them.
 var handledIDs = [String]()
+// The mids of messages handled in the last 3 hours: the server, or anyone with a token, can publish an old envelope again.
+var handledMids = [String: Double]()
 let handledKeep = 200
 let handledSaved = 50
 var connected = false
@@ -821,6 +857,7 @@ func readSavedID() {
     if let room = raw["room"] as? String, room != conf.room { return }
     lastID = raw["last_id"] as? String ?? ""
     handledIDs = raw["handled"] as? [String] ?? []
+    handledMids = raw["mids"] as? [String: Double] ?? [:]
     phone = raw["phone"] as? String ?? ""
     phoneAt = raw["phone_at"] as? Double ?? 0
     moved = raw["moved"] as? Bool ?? false
@@ -832,6 +869,7 @@ func writeState() {
     let state: [String: Any] = ["pid": getpid(), "started": Int(started.timeIntervalSince1970),
                                 "sent": sentCount, "received": receivedCount, "last_sent": Int(lastSent),
                                 "last_received": Int(lastReceived), "last_id": lastID, "handled": Array(handledIDs.suffix(handledSaved)),
+                                "mids": handledMids,
                                 "connected": connected,
                                 "phone": phone, "phone_at": phoneAt, "moved": moved, "members": members, "room": conf.room]
     if let data = try? JSONSerialization.data(withJSONObject: state) {
@@ -972,6 +1010,7 @@ func publish(kind: String, mime: String, data: Data, text: String?, topic: Strin
     var meta: [String: Any] = ["k": kind, "m": mime, "src": "mac", "n": conf.deviceName]
     if !conf.deviceID.isEmpty { meta["id"] = conf.deviceID }
     if !["text", "image", "file"].contains(kind), !conf.publicKey.isEmpty { meta["pk"] = conf.publicKey }
+    stampMessage(&meta)
     meta.merge(extra) { _, new in new }
     var body: Data? = nil
     var envelope: Data? = nil
@@ -1044,7 +1083,8 @@ func publish(kind: String, mime: String, data: Data, text: String?, topic: Strin
                             done?(false)
                             return
                         }
-                        publish(kind: kind, mime: mime, data: data, text: text, topic: topic, extra: extra,
+                        // The same mid: if the first try did get through, receivers drop the repeat.
+                        publish(kind: kind, mime: mime, data: data, text: text, topic: topic, extra: extra.merging(["mid": meta["mid"] ?? ""]) { $1 },
                                 attempt: attempt + 1, seq: mySeq, done: done)
                     }
                     return
@@ -1190,6 +1230,7 @@ func publishFile(_ src: URL, extra: [String: Any], announce: Bool, done: ((Bool)
             var meta: [String: Any] = ["k": "file", "m": type?.preferredMIMEType ?? "application/octet-stream", "src": "mac",
                                        "n": conf.deviceName, "f": name, "x": 2, "s": sealed.size]
             if !conf.deviceID.isEmpty { meta["id"] = conf.deviceID }
+            stampMessage(&meta)
             meta.merge(extra) { _, new in new }
             guard let metaJSON = try? JSONSerialization.data(withJSONObject: meta), let sealedMeta = seal(metaJSON) else {
                 fail(L("не зашифровал описание", "could not encrypt the description"))
@@ -1491,15 +1532,15 @@ func isComputer(_ source: Any?) -> Bool {
 }
 
 @discardableResult
-func remember(_ meta: [String: Any]) -> Bool {
+func remember(_ meta: [String: Any], fresh: Bool = false) -> Bool {
     let name = meta["n"] as? String ?? "?"
     let source = meta["src"] as? String ?? "android"
     let id = meta["id"] as? String ?? "legacy-\(source)-\(name)"
     let isNew = members[id] == nil
     let known = members[id]?["pk"] as? String ?? ""
     let offered = (meta["pk"] as? String).flatMap { Data(base64Encoded: $0)?.count == 32 ? $0 : nil } ?? ""
-    let renewed = meta["re"] as? Bool == true && meta["k"] as? String == "hello" && !offered.isEmpty
-    members[id] = ["name": name, "src": source, "seen": Date().timeIntervalSince1970, "pk": known.isEmpty || renewed ? offered : known]
+    let renewed = fresh && meta["re"] as? Bool == true && meta["k"] as? String == "hello"
+    members[id] = ["name": name, "src": source, "seen": Date().timeIntervalSince1970, "pk": storedKey(known: known, offered: offered, renew: renewed)]
     if !isComputer(source) {
         if conf.listenTopics.first == conf.room && meta["id"] != nil { moved = true }
         phone = name
@@ -1660,7 +1701,7 @@ func apply(_ meta: [String: Any], _ data: Data?, fresh: Bool = true) {
     let kind = meta["k"] as? String ?? ""
     let from = shownName(meta, L("устройства", "a device"))
     if control(kind, meta) { return }
-    let isNew = remember(meta)
+    let isNew = remember(meta, fresh: fresh)
     if kind == "hello" {
         if isNew {
             log(L("новое устройство: \(from)", "a new device: \(from)"))
@@ -1725,6 +1766,45 @@ func apply(_ meta: [String: Any], _ data: Data?, fresh: Bool = true) {
     writeState()
 }
 
+/// Puts the sealing time (Unix ms) and a new message id on an outgoing message.
+func stampMessage(_ meta: inout [String: Any], now: Double = Date().timeIntervalSince1970) {
+    meta["ts"] = Int64((now * 1000).rounded())
+    meta["mid"] = randomHex(8)
+}
+
+/// The message's mid when it is one: 16 lowercase hex characters.
+func messageID(_ value: Any?) -> String? {
+    guard let mid = value as? String, mid.count == 16, mid.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
+    return mid
+}
+
+/// True when a message with this mid was handled within the last 3 hours; otherwise remembers it. Keeps at most `keep`.
+func seenMessage(_ mid: String, now: Double, in mids: inout [String: Double], window: Double = midWindow, keep: Int) -> Bool {
+    mids = mids.filter { now - $0.value < window }
+    if mids[mid] != nil { return true }
+    mids[mid] = now
+    if mids.count > keep {
+        mids.sorted { $0.value < $1.value }.prefix(mids.count - keep).forEach { mids[$0.key] = nil }
+    }
+    return false
+}
+
+/// How old a message's content is: the larger of the event's age and the age of the sender's ts (Unix ms), so a
+/// replayed envelope stays old. A ts more than 5 minutes ahead counts as old; without ts the event time decides.
+func contentAge(eventTime: Double, ts: Any?, now: Double) -> Double {
+    let eventAge = now - eventTime
+    guard let ms = (ts as? NSNumber)?.doubleValue, ms.isFinite else { return eventAge }
+    let sealed = ms / 1000
+    if sealed - now > futureSkew { return .infinity }
+    return max(eventAge, now - sealed)
+}
+
+/// The public key to keep for a member: the first one seen, replaced only by a fresh hello with re.
+func storedKey(known: String, offered: String, renew: Bool) -> String {
+    guard !offered.isEmpty else { return known }
+    return known.isEmpty || renew ? offered : known
+}
+
 /// True when the event with this id was handled already; otherwise remembers it.
 func alreadyHandled(_ id: String, in ids: inout [String], keep: Int) -> Bool {
     if ids.contains(id) { return true }
@@ -1740,8 +1820,9 @@ func handle(_ event: [String: Any], primary: Bool) {
         return
     }
     if primary { lastID = id }
-    let time = event["time"] as? Double ?? Date().timeIntervalSince1970
-    let age = Date().timeIntervalSince1970 - time
+    let now = Date().timeIntervalSince1970
+    let time = event["time"] as? Double ?? now
+    let eventAge = now - time
     guard let message = event["message"] as? String, let sealedMeta = Data(base64Encoded: message),
           let metaJSON = unseal(sealedMeta),
           let meta = (try? JSONSerialization.jsonObject(with: metaJSON)) as? [String: Any] else {
@@ -1752,12 +1833,19 @@ func handle(_ event: [String: Any], primary: Bool) {
     if let sender = meta["id"] as? String, !conf.deviceID.isEmpty, sender == conf.deviceID { return }
     if let targets = meta["to"] as? [String], !conf.deviceID.isEmpty, !targets.contains(conf.deviceID) { return }
     let kind = meta["k"] as? String ?? ""
+    // Every kind, control messages included: a legitimate sender never repeats a mid, so a repeat is a replay.
+    if let mid = messageID(meta["mid"]), seenMessage(mid, now: now, in: &handledMids, keep: midKeep) {
+        log(L("пропустил повтор сообщения \(mid)", "skipped a repeated message \(mid)"))
+        writeState()
+        return
+    }
+    let age = contentAge(eventTime: time, ts: meta["ts"], now: now)
     if age >= staleAfter && !["bye", "rekey", "kick", "file"].contains(kind) {
         log(L("пропустил старое сообщение \(id)", "skipped an old message \(id)"))
         writeState()
         return
     }
-    if kind == "file" && age >= fileStaleAfter {
+    if kind == "file" && eventAge >= fileStaleAfter {
         let name = meta["f"] as? String ?? "file"
         let from = shownName(meta, L("устройства", "a device"))
         log(L("не получил файл \(name) от \(from): отправлен больше 3 часов назад", "did not receive the file \(name) from \(from): it was sent more than 3 hours ago"))
@@ -1767,7 +1855,7 @@ func handle(_ event: [String: Any], primary: Bool) {
     }
     guard let attachment = event["attachment"] as? [String: Any], let url = attachment["url"] as? String,
           let link = URL(string: url) else {
-        apply(meta, nil)
+        apply(meta, nil, fresh: age < staleAfter)
         return
     }
     if meta["k"] as? String == "file", (meta["x"] as? NSNumber)?.intValue == 2 {
