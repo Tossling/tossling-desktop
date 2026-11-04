@@ -216,6 +216,9 @@ and Thunar items stay until the first click, which deletes all of them.
   copied in Finder, text over 1 MB and whatever arrived from another device a minute ago. Text and images older than 15
   minutes (say, the Mac was asleep) do not go into the clipboard. Files are accepted for 3 hours, as long as the server
   keeps attachments.
+- A password manager's copy goes only when you send it with the hotkey or Send the Clipboard Now, and then marked as a
+  secret. Secrets that arrive are marked concealed on the clipboard, stay out of the history, and the notification does
+  not show them.
 
 ## Troubleshooting
 
