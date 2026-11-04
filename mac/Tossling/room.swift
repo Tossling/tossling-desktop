@@ -178,6 +178,31 @@ func memberKey(_ info: [String: Any]) -> String? {
     return text
 }
 
+/// Before a removal: the remaining devices (every member but this Mac and the removed one) that have no public key to
+/// seal the new room key for, and those whose key changed since the user last accepted it. Devices without an id
+/// (legacy-…) cannot get a sealed key either.
+func removalCheck(_ members: [String: [String: Any]], removing id: String, me: String) -> (noKey: [String], changed: [String]) {
+    let remaining = members.filter { $0.key != id && $0.key != me }
+    let noKey = remaining.filter { $0.key.hasPrefix("legacy-") || memberKey($0.value) == nil }.map(\.key).sorted()
+    let changed = remaining.filter { $0.value["key_changed"] != nil }.map(\.key).sorted()
+    return (noKey, changed)
+}
+
+func memberName(_ id: String) -> String {
+    conf.aliases[id].flatMap { $0.isEmpty ? nil : $0 } ?? members[id]?["name"] as? String ?? id
+}
+
+func memberNames(_ ids: [String]) -> String {
+    ids.map(memberName).joined(separator: ", ")
+}
+
+func acceptKey(_ id: String) {
+    guard let member = members[id] else { return }
+    members[id] = acceptedKey(member)
+    log(L("принял новый ключ \(memberName(id))", "accepted the new key of \(memberName(id))"))
+    writeState()
+}
+
 func mintToken(server: String, token: String, label: String) -> (code: Int, token: String?) {
     var r = serverRequest(server, "v1/account/token", method: "POST", token: token)
     r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -242,14 +267,24 @@ func dropToken(_ token: String) {
     }
 }
 
-func revokeDevice(_ id: String) {
+/// Disconnects a device. `accepting` lists the devices with a changed key the user was warned about and confirmed.
+func revokeDevice(_ id: String, accepting: [String] = []) {
     guard id != conf.owner else {
         notify(L("Создателя комнаты нельзя отключить", "The creator of the room cannot be disconnected"))
         return
     }
     let name = (members[id]?["name"] as? String).map { conf.aliases[id] ?? $0 } ?? L("устройство", "a device")
-    let others = members.filter { $0.key != id && $0.key != conf.deviceID && !$0.key.hasPrefix("legacy-") }
-    let isLegacy = others.values.contains { memberKey($0) == nil }
+    let check = removalCheck(members, removing: id, me: conf.deviceID)
+    guard check.noKey.isEmpty else {
+        log(L("не отключил \(name): нет ключа у \(memberNames(check.noKey))", "did not disconnect \(name): no key from \(memberNames(check.noKey))"))
+        notify(L("Не отключил \(name): нет ключа у \(memberNames(check.noKey)). Открой Tossling там или обнови его", "Did not disconnect \(name): no key from \(memberNames(check.noKey)). Open Tossling there or update it"))
+        return
+    }
+    guard Set(check.changed).isSubset(of: accepting) else {
+        notify(L("Не отключил \(name): у \(memberNames(check.changed)) сменился ключ, попробуй ещё раз", "Did not disconnect \(name): the key of \(memberNames(check.changed)) changed, try again"))
+        return
+    }
+    let others = members.filter { $0.key != id && $0.key != conf.deviceID }
     let suffix = randomHex(12)
     let key = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.base64EncodedString()
     let oldToken = conf.token
@@ -257,11 +292,17 @@ func revokeDevice(_ id: String) {
     let server = conf.server
     DispatchQueue.global(qos: .userInitiated).async {
         let room = channelPrefix(conf.server) + suffix
-        let token = isLegacy || oldToken.isEmpty ? nil : createToken(label: "tossling")
+        let token = oldToken.isEmpty ? nil : createToken(label: "tossling")
         DispatchQueue.main.async {
             let abandon: (String) -> Void = { text in
                 if let token = token { dropToken(token) }
                 notify(text)
+            }
+            // Only sealed keys: the room key never goes in the clear, not even under the old room key.
+            let sealed = sealRoomKey(room: room, key: key, token: token, for: others.compactMapValues(memberKey))
+            guard sealed.keys.count == others.count else {
+                abandon(L("Не отключил \(name): не зашифровал новый ключ для всех устройств", "Did not disconnect \(name): could not seal the new key for every device"))
+                return
             }
             publish(kind: "kick", mime: "text/plain", data: Data(), text: "", extra: ["to": [id]]) { kicked in
                 guard kicked else {
@@ -287,7 +328,7 @@ func revokeDevice(_ id: String) {
                     }
                     writeState()
                     log(L("отключил \(name): новая комната и ключ\(token == nil ? "" : ", новый токен")", "disconnected \(name): a new room and key\(token == nil ? "" : ", a new token")"))
-                    notify(L("\(name) отключён от комнаты\(isLegacy ? ". Часть устройств без ключей: обнови их и отключи ещё раз, если нужно" : "")", "\(name) is disconnected from the room\(isLegacy ? ". Some devices have no keys: update them and disconnect again if needed" : "")"))
+                    notify(L("\(name) отключён от комнаты", "\(name) is disconnected from the room"))
                     let restart = { if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } } }
                     guard !own.isEmpty else { return restart() }
                     deleteDeviceTokens(server: server, token: own, id: id) { code, removed in
@@ -297,13 +338,7 @@ func revokeDevice(_ id: String) {
                     }
                 }
                 guard !others.isEmpty else { return finish() }
-                let keys = others.compactMapValues(memberKey)
-                let sealed = sealRoomKey(room: room, key: key, token: token, for: keys)
-                var extra: [String: Any] = ["to": Array(others.keys), "e": sealed.ephemeral, "keys": sealed.keys]
-                if isLegacy {
-                    extra["r"] = room
-                    extra["key"] = key
-                }
+                let extra: [String: Any] = ["to": Array(others.keys), "e": sealed.ephemeral, "keys": sealed.keys]
                 publish(kind: "rekey", mime: "text/plain", data: Data(), text: "", extra: extra) { ok in
                     if ok { finish() } else { abandon(L("Не разослал новый ключ: нет связи с сервером, \(name) всё ещё в комнате", "Did not send out the new key: no connection to the server, \(name) is still in the room")) }
                 }

@@ -244,7 +244,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             let item = submenu(name, symbol: computer ? "laptopcomputer" : "iphone", deviceMenu(id: id, name: name, own: own, hasAlias: alias != nil))
             let role = id == conf.owner ? L(" · создатель комнаты", " · created the room") : ""
             let ownNote = alias == nil ? "" : "\(own) · "
-            item.attributedTitle = styled(name, ownNote + (memberKey(value) == nil ? L("\(state) · старая версия", "\(state) · old version") : state) + role)
+            let keyNote = value["key_changed"] == nil ? "" : L(" · ключ сменился", " · key changed")
+            item.attributedTitle = styled(name, ownNote + (memberKey(value) == nil ? L("\(state) · старая версия", "\(state) · old version") : state) + keyNote + role)
             menu.addItem(item)
         }
         menu.addItem(.separator())
@@ -268,6 +269,16 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             menu.addItem(info(L("На этом Mac: \(name)", "On this Mac: \(name)")))
         }
         menu.addItem(info(L("Своё имя: \(own)", "Its own name: \(own)")))
+        if let changed = members[id]?["key_changed"] as? Double {
+            menu.addItem(.separator())
+            menu.addItem(info(L("Ключ сменился \(ago(changed))", "Its key changed \(ago(changed))"), symbol: "exclamationmark.triangle"))
+            menu.addItem(ActionItem(L("Принять новый ключ…", "Accept the New Key…")) { [weak self] in
+                self?.confirm(L("Принять новый ключ \(name)?", "Accept the new key of \(name)?"),
+                              L("Ключ меняется, когда устройство переустановили или подключили заново. Если этого не было, ключ мог подменить кто-то другой из комнаты: тогда не принимай его, а отключи \(name).",
+                                "A key changes when the device was reinstalled or paired again. If that did not happen, someone else in the room may have replaced it: then do not accept it, disconnect \(name) instead."),
+                              button: L("Принять", "Accept")) { acceptKey(id) }
+            })
+        }
         menu.addItem(.separator())
         menu.addItem(ActionItem(L("Переименовать…", "Rename…")) { [weak self] in
             self?.ask(L("Как подписать «\(own)» на этом Mac?", "What should «\(own)» be called on this Mac?"), value: name,
@@ -286,12 +297,32 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             menu.addItem(info(L("Отключить нельзя, сервер не принимает токен этого Mac", "Cannot disconnect while the server refuses this Mac's token")))
             return menu
         }
-        menu.addItem(ActionItem(L("Отключить от комнаты…", "Disconnect from the Room…")) { [weak self] in
-            self?.confirm(L("Отключить \(name)?", "Disconnect \(name)?"),
-                          L("Комната получит новый ключ, а при поддержке сервера и новый токен. \(name) больше не увидит буфер, пока его не подключат заново.", "The room gets a new key, and a new token where the server allows it. \(name) will not see the clipboard until it is paired again."),
-                          button: L("Отключить", "Disconnect")) { revokeDevice(id) }
-        })
+        menu.addItem(ActionItem(L("Отключить от комнаты…", "Disconnect from the Room…")) { [weak self] in self?.confirmRemoval(id: id, name: name) })
         return menu
+    }
+
+    private func confirmRemoval(id: String, name: String) {
+        let check = removalCheck(members, removing: id, me: conf.deviceID)
+        guard check.noKey.isEmpty else {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = L("Нельзя отключить \(name)", "Cannot disconnect \(name)")
+            alert.informativeText = L("Нет ключа у: \(memberNames(check.noKey)). Открой Tossling на этом устройстве (оно пришлёт ключ) или обнови его, потом попробуй снова. Без ключа новый ключ комнаты пришлось бы отправить под старым, который знает и \(name).",
+                                      "No key from: \(memberNames(check.noKey)). Open Tossling on that device (it then sends its key) or update it, and try again. Without a key the new room key would have to go under the old one, which \(name) knows too.")
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: L("ОК", "OK"))
+            alert.runModal()
+            return
+        }
+        var text = L("Комната получит новый ключ, а при поддержке сервера и новый токен. \(name) больше не увидит буфер, пока его не подключат заново.", "The room gets a new key, and a new token where the server allows it. \(name) will not see the clipboard until it is paired again.")
+        if !check.changed.isEmpty {
+            text += "\n\n" + L("Внимание: сменился ключ у \(memberNames(check.changed)). Новый ключ комнаты уйдёт на их новые ключи. Если не знаешь, почему они сменились (переустановка, новое подключение), сначала проверь это.",
+                                "Warning: the key of \(memberNames(check.changed)) changed. The new room key goes to their new keys. If you do not know why they changed (a reinstall, pairing again), check that first.")
+        }
+        confirm(L("Отключить \(name)?", "Disconnect \(name)?"), text,
+                button: check.changed.isEmpty ? L("Отключить", "Disconnect") : L("Всё равно отключить", "Disconnect Anyway")) {
+            revokeDevice(id, accepting: check.changed)
+        }
     }
 
     private func alertsMenu() -> NSMenu {
