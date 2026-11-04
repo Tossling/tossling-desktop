@@ -1,11 +1,13 @@
 package com.kopylovis.tossling.desktop
 
+import com.kopylovis.tossling.protocol.Invites
 import com.kopylovis.tossling.protocol.SyncJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,10 +43,15 @@ class SettingsTest {
 
     @Test
     fun readsTheJoinCommand() {
-        assertEquals("tossling.example.com" to "7KQ2-M9XD", Setup.parseJoin("tossling join tossling.example.com/7KQ2-M9XD"))
-        assertEquals("http://127.0.0.1:8090" to "7kq2m9xd", Setup.parseJoin(" http://127.0.0.1:8090/7kq2m9xd "))
+        assertEquals("tossling.example.com" to "7KQ2M-9XDRT", Setup.parseJoin("tossling join tossling.example.com/7KQ2M-9XDRT"))
+        assertEquals("http://127.0.0.1:8090" to "7kq2m9xdrt", Setup.parseJoin(" http://127.0.0.1:8090/7kq2m9xdrt "))
+        assertEquals("an older app's 8-character code still joins", "tossling.example.com" to "7KQ2-M9XD", Setup.parseJoin("tossling join tossling.example.com/7KQ2-M9XD"))
         assertNull(Setup.parseJoin("tossling.example.com"))
         assertNull(Setup.parseJoin("tossling.example.com/123"))
+        assertNull(Setup.parseJoin("tossling.example.com/7KQ2M-9XDR"))
+        assertNull(Setup.parseJoin("tossling.example.com/7KQ2M-9XDRTA"))
+        assertNull(Setup.parseJoin("tossling.example.com/7KQ2M_9XDRT"))
+        assertNotNull(Setup.parseJoin("tossling.example.com/${Invites.newCode()}"))
         assertEquals("https://tossling.example.com", Setup.serverOf("tossling.example.com/"))
         assertEquals("http://127.0.0.1:8090", Setup.serverOf("http://127.0.0.1:8090"))
     }

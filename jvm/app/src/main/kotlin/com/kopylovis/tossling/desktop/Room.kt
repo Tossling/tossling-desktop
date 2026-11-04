@@ -238,8 +238,9 @@ class Room(
 
     suspend fun invite(code: String): String? {
         val conf = settings
-        val topic = Invites.topic(code = code, prefix = roomPrefix(server = conf.server))
-        val key = withContext(Dispatchers.Default) { Invites.key(code = code) }
+        val prefix = roomPrefix(server = conf.server)
+        // A version 2 topic and key come from PBKDF2 (600,000 rounds): both are worked out off the calling thread.
+        val (topic, key) = withContext(Dispatchers.Default) { Invites.topic(code = code, prefix = prefix) to Invites.key(code = code) }
         val offer = Invites.seal(
             invite = Invite(server = conf.server, token = conf.token, room = conf.room, key = conf.key, name = conf.deviceName, expires = now() / 1000.0 + Invites.LIFETIME_SECONDS, owner = conf.owner.ifEmpty { null }),
             key = key,
