@@ -540,9 +540,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             notify(L("Не собрал QR-код", "Could not make the QR code"))
             return
         }
-        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-        let raw = String((0..<8).map { _ in alphabet[Int.random(in: 0..<alphabet.count)] })
-        let code = "\(raw.prefix(4))-\(raw.suffix(4))"
+        let code = newInviteCode()
         let host = conf.server.components(separatedBy: "://").last ?? conf.server
         let command = "tossling join \(host)/\(code)"
         let model = showPanel(title: L("Добавить устройство", "Add a Device"), image: image,
@@ -570,8 +568,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private func showJoin() {
         ask(L("Войти в другую комнату", "Join Another Room"), value: "",
-            note: L("На компьютере, который уже в комнате, выбери Устройства → Добавить устройство (на Маке еще tossling invite). Вставь код вида tossling.example.com/ABCD-EFGH. Этот Mac перейдет в ту комнату.",
-                    "On a computer that is already in the room choose Devices → Add a Device (on a Mac also tossling invite). Paste the code like tossling.example.com/ABCD-EFGH. This Mac moves to that room."),
+            note: L("На компьютере, который уже в комнате, выбери Устройства → Добавить устройство (на Маке еще tossling invite). Вставь код вида tossling.example.com/7KQ2M-9XDRT. Этот Mac перейдет в ту комнату.",
+                    "On a computer that is already in the room choose Devices → Add a Device (on a Mac also tossling invite). Paste the code like tossling.example.com/7KQ2M-9XDRT. This Mac moves to that room."),
             button: L("Войти", "Join")) { [weak self] text in self?.join(text) }
     }
 
@@ -579,7 +577,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         var target = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if target.hasPrefix("tossling join ") { target = String(target.dropFirst("tossling join ".count)).trimmingCharacters(in: .whitespaces) }
         guard let slash = target.lastIndex(of: "/"), target.index(after: slash) < target.endIndex else {
-            notify(L("Нужен код вида tossling.example.com/ABCD-EFGH", "The code should look like tossling.example.com/ABCD-EFGH"))
+            notify(L("Нужен код вида tossling.example.com/7KQ2M-9XDRT", "The code should look like tossling.example.com/7KQ2M-9XDRT"))
             return
         }
         let address = normalizedServer(String(target[..<slash]))

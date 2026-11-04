@@ -36,7 +36,7 @@ if has_flag(args, "-h", "--help") or (args and args[0] not in ACTIONS and not (a
     print(t("tossling setup [<сервер>]   подключить свой сервер и телефон с приложением Tossling (токен: TOSSLING_TOKEN или ввод)", "tossling setup [<server>]   connect your server and a phone with the Tossling app (token: TOSSLING_TOKEN or typed)"))
     print(t("tossling pair [--new]       показать QR для телефона; --new — новый ключ, все устройства подключать заново", "tossling pair [--new]       QR code for a phone; --new: a new key, every device has to pair again"))
     print(t("tossling invite             код для другого компьютера (10 минут, один раз)", "tossling invite             a code for another computer (10 minutes, once)"))
-    print(t("tossling join <код>         войти в комнату другого компьютера: tossling join tossling.example.com/ABCD-EFGH", "tossling join <code>        join the room of another computer: tossling join tossling.example.com/ABCD-EFGH"))
+    print(t("tossling join <код>         войти в комнату другого компьютера: tossling join tossling.example.com/7KQ2M-9XDRT", "tossling join <code>        join the room of another computer: tossling join tossling.example.com/7KQ2M-9XDRT"))
     print(t("tossling rename             переименовать устройство в комнате (выбор из списка)", "tossling rename             rename a device of the room (pick from a list)"))
     print(t("tossling rename <имя>       новое имя этого Mac — его увидят все в комнате", "tossling rename <name>      a new name for this Mac, seen by everyone in the room"))
     print(t("tossling rename <кто> <имя> как называть другое устройство на этом Mac (пустое имя — вернуть его собственное)", "tossling rename <who> <name> what to call another device on this Mac (empty: its own name again)"))
@@ -335,8 +335,14 @@ CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def new_code():
-    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
-    return f"{raw[:4]}-{raw[4:]}"
+    """A version 2 invite code, 10 characters shown as XXXXX-XXXXX; version 1 codes (8 characters) are only joined."""
+    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(10))
+    return f"{raw[:5]}-{raw[5:]}"
+
+
+def is_invite_code(code):
+    """8 letters and digits are a version 1 code from an older app, 10 a version 2 one; dashes and case do not matter."""
+    return bool(re.match(r"^[0-9A-Za-z-]+$", code)) and len(re.sub(r"[^0-9A-Za-z]", "", code)) in (8, 10)
 
 
 def setup():
@@ -489,8 +495,8 @@ def join():
     target = args[1].strip()
     server, _, code = target.rpartition("/")
     server = normalize_server(server or read_conf().get("server", ""))
-    if not server or not re.match(r"^[0-9A-Za-z]{4}-?[0-9A-Za-z]{4}$", code):
-        sys.exit(t("Нужно вида: tossling join tossling.example.com/ABCD-EFGH", "Expected: tossling join tossling.example.com/ABCD-EFGH"))
+    if not server or not is_invite_code(code):
+        sys.exit(t("Нужно вида: tossling join tossling.example.com/7KQ2M-9XDRT", "Expected: tossling join tossling.example.com/7KQ2M-9XDRT"))
     agent.build()
     old = read_conf()
     device_id = old.get("device_id") or secrets.token_hex(8)
@@ -1067,7 +1073,7 @@ def menu():
         action = MENU[at][0].split()
         if action == ["join"]:
             try:
-                code = input(t("Код с другого компьютера (tossling.example.com/ABCD-EFGH): ", "Code from the other computer (tossling.example.com/ABCD-EFGH): ")).strip()
+                code = input(t("Код с другого компьютера (tossling.example.com/7KQ2M-9XDRT): ", "Code from the other computer (tossling.example.com/7KQ2M-9XDRT): ")).strip()
             except (KeyboardInterrupt, EOFError):
                 print()
                 continue

@@ -153,6 +153,12 @@ class CliTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.config))
         os.remove(self.calls)
 
+    def test_join_wants_an_invite_code(self):
+        for code in ("ABC", "7KQ2M-9XDR", "7KQ2M-9XDRTA", "7KQ2M_9XDRT"):
+            r = self.run_tossling("join", f"tossling.example.com/{code}")
+            self.assertNotEqual(r.returncode, 0, code)
+            self.assertIn("tossling.example.com/7KQ2M-9XDRT", r.stderr, code)
+
     def test_unknown_action(self):
         self.assertEqual(self.run_tossling("nothing").returncode, 2)
 
