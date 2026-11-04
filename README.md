@@ -138,8 +138,11 @@ A short checklist for a Mac that has never seen Tossling.
 
 On Windows and Linux Tossling sits in the tray. It joins a room with an invite from another computer (Devices, then
 Add a Device, or `tossling invite` on a Mac), or creates a room on your server and shows the QR code for the phone.
-Text, images, files and folders (as a zip) go both ways, and passwords marked by password managers are skipped. Updates
-come from a feed signed with the same Ed25519 key as the Mac appcast.
+Text, images, files and folders (as a zip) go both ways. Passwords marked by password managers go only when you send
+them with the hotkey or Send the Clipboard Now, and then as secrets: a secret that arrives stays out of the history and
+the notification, and goes on the clipboard marked for clipboard history and clipboard managers to leave out
+(Windows clipboard history and cloud clipboard, KDE's Klipper). Updates come from a feed signed with the same Ed25519
+key as the Mac appcast.
 
 ### Windows
 

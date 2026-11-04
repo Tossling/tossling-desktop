@@ -37,6 +37,10 @@ class WindowsClipboard : AwtClipboard() {
     private val cloud = format("CanUploadToCloudClipboard")
     private var procedure: WinUser.WindowProc? = null
 
+    // Clipboard history, the cloud clipboard and clipboard monitors leave out content with these formats (DWORD 0).
+    override val secretMarks: List<Pair<String, ByteArray>> =
+        listOf("ExcludeClipboardContentFromMonitorProcessing", "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard").map { it to ByteArray(4) }
+
     override fun watch(onChange: () -> Unit) {
         thread(isDaemon = true, name = "clipboard-listener") {
             val user32 = User32.INSTANCE

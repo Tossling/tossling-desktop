@@ -6,6 +6,7 @@ import java.awt.datatransfer.Clipboard
 import java.awt.datatransfer.ClipboardOwner
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
+import java.awt.datatransfer.SystemFlavorMap
 import java.awt.datatransfer.Transferable
 import java.awt.datatransfer.UnsupportedFlavorException
 import java.awt.image.BufferedImage
@@ -38,7 +39,9 @@ interface SystemClipboard {
     fun watch(onChange: () -> Unit)
     fun read(): Clip?
     fun isPrivate(): Boolean
-    fun write(clip: Clip)
+
+    /** [secret]: the content arrived with `sens`, so it goes on the clipboard marked for history and clipboard managers to leave out. */
+    fun write(clip: Clip, secret: Boolean = false)
     fun echo(clip: Clip): String = clip.digest
 }
 
@@ -51,6 +54,9 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
     override fun watch(onChange: () -> Unit) = Unit
 
     override fun isPrivate(): Boolean = false
+
+    /** The native formats, with their data, that mark a secret on this platform's clipboard; none where it has no such mark. */
+    protected open val secretMarks: List<Pair<String, ByteArray>> = emptyList()
 
     override fun read(): Clip? = retry {
         val contents = clipboard.getContents(null) ?: return@retry null
@@ -68,12 +74,14 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
         }
     }
 
-    override fun write(clip: Clip) {
-        val transferable: Transferable = when (clip) {
+    override fun write(clip: Clip, secret: Boolean) {
+        val content: Transferable = when (clip) {
             is Clip.Text -> StringSelection(clip.text)
             is Clip.Image -> ImageSelection(ImageIO.read(ByteArrayInputStream(clip.bytes)) ?: return)
             is Clip.Files -> FileSelection(clip.files)
         }
+        val marks = if (secret) secretMarks else emptyList()
+        val transferable = if (marks.isEmpty()) content else MarkedSelection(content = content, marks = marks)
         retry { clipboard.setContents(transferable, this) }
     }
 
@@ -111,7 +119,27 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
         override fun getTransferData(flavor: DataFlavor): Any = if (flavor == DataFlavor.javaFileListFlavor) files else throw UnsupportedFlavorException(flavor)
     }
 
+    /**
+     * [content] with extra native formats. Each mark gets a flavor of its own mapped to exactly that native name, and AWT
+     * writes an InputStream flavor's bytes to the native format as they are, in the same clipboard write as the content.
+     */
+    private class MarkedSelection(private val content: Transferable, marks: List<Pair<String, ByteArray>>) : Transferable {
+        private val marks = marks.map { (native, data) -> markFlavor(native) to data }
+        override fun getTransferDataFlavors(): Array<DataFlavor> = content.transferDataFlavors + marks.map { it.first }
+        override fun isDataFlavorSupported(flavor: DataFlavor): Boolean = marks.any { it.first == flavor } || content.isDataFlavorSupported(flavor)
+        override fun getTransferData(flavor: DataFlavor): Any = marks.firstOrNull { it.first == flavor }?.second?.let(::ByteArrayInputStream) ?: content.getTransferData(flavor)
+    }
+
     companion object {
+        private val markFlavors = mutableMapOf<String, DataFlavor>()
+
+        @Synchronized
+        private fun markFlavor(native: String): DataFlavor = markFlavors.getOrPut(native) {
+            val flavor = DataFlavor("application/x-tossling-mark-${native.lowercase().filter { it.isLetterOrDigit() }}; class=java.io.InputStream")
+            (SystemFlavorMap.getDefaultFlavorMap() as? SystemFlavorMap)?.setNativesForFlavor(flavor, arrayOf(native))
+            flavor
+        }
+
         fun pngOf(image: Image): ByteArray? {
             val width = image.getWidth(null)
             val height = image.getHeight(null)
@@ -125,6 +153,10 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
 }
 
 class PollingClipboard : AwtClipboard() {
+
+    // KDE's Klipper and other clipboard managers on Linux leave out content with this hint.
+    override val secretMarks: List<Pair<String, ByteArray>> =
+        if (Platform.os == Os.LINUX) listOf("x-kde-passwordManagerHint" to "secret".toByteArray()) else emptyList()
 
     override fun watch(onChange: () -> Unit) {
         thread(isDaemon = true, name = "clipboard-poll") {

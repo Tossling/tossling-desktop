@@ -191,12 +191,14 @@ class Room(
 
     fun sendNow() = scope.launch {
         val clip = clipboard.read()
+        // A password manager's copy never goes by itself, only when the user sends it like this, and then marked secret.
+        val secret = clip != null && clipboard.isPrivate()
         when {
             clip == null -> notifier.notify(L("Нечего отправлять: буфер пуст", "Nothing to send: the clipboard is empty"))
-            clipboard.isPrivate() -> notifier.notify(L("Не отправил: в буфере пароль или служебные данные", "Did not send: the clipboard holds a password or private data"))
+            clip is Clip.Files && secret -> notifier.notify(L("Не отправил: в буфере служебные данные", "Did not send: the clipboard holds private data"))
             clip is Clip.Files -> clip.files.forEach { sendFile(it) }
             !claim(digest = clip.digest, within = DUPLICATE_MS) -> Unit
-            else -> prepared(clip)?.let { send(clip = it, seq = contentSeq.incrementAndGet(), announce = true) }
+            else -> prepared(clip)?.let { send(clip = it, seq = contentSeq.incrementAndGet(), announce = true, secret = secret) }
         }
     }
 
@@ -382,7 +384,7 @@ class Room(
         }
     }
 
-    private suspend fun handle(event: NtfyEvent) {
+    internal suspend fun handle(event: NtfyEvent) {
         if (event.event != MESSAGE_EVENT) return
         val conf = settings
         if (event.topic.isNotEmpty() && event.topic != conf.room) return
@@ -459,12 +461,12 @@ class Room(
         when (kind) {
             ClipMeta.TEXT -> {
                 val text = meta.text ?: url?.let { download(endpoint = conf.endpoint, url = it, cipher = cipher, meta = meta, from = from) }?.decodeToString() ?: return
-                apply(clip = Clip.Text(text), from = from)
+                apply(clip = Clip.Text(text), from = from, secret = meta.sensitive == true)
             }
 
             ClipMeta.IMAGE -> {
                 val bytes = url?.let { download(endpoint = conf.endpoint, url = it, cipher = cipher, meta = meta, from = from) } ?: return
-                apply(clip = Clip.Image(bytes = bytes, mime = meta.mime), from = from)
+                apply(clip = Clip.Image(bytes = bytes, mime = meta.mime), from = from, secret = meta.sensitive == true)
             }
 
             ClipMeta.FILE -> receiveFile(meta = meta, url = url ?: return, cipher = cipher, fresh = fresh, from = from)
@@ -473,14 +475,20 @@ class Room(
         }
     }
 
-    private fun apply(clip: Clip, from: String) {
+    /**
+     * Secret content (`sens`, a password manager's copy on the sender) goes on the clipboard marked where the platform
+     * allows, stays out of the history, and the log and notification name it without its content or size.
+     */
+    private fun apply(clip: Clip, from: String, secret: Boolean = false) {
         if (clip is Clip.Text && (clipboard.read() as? Clip.Text)?.text == clip.text) {
             Log.write("← $from: the text is already in the clipboard, skipped")
             return
         }
         lastReceived = setOf(clip.digest, clipboard.echo(clip)) to now()
-        clipboard.write(clip)
+        clipboard.write(clip = clip, secret = secret)
         val what = when (clip) {
+            is Clip.Text if secret -> L("секретный текст", "secret text")
+            is Clip.Image if secret -> L("секретная картинка", "secret image")
             is Clip.Text -> {
                 history.addText(text = clip.text, incoming = true, device = from)
                 L("текст ${clip.text.length} зн.", "text, ${clip.text.length} chars")
@@ -611,8 +619,10 @@ class Room(
         is Clip.Files -> clip
     }
 
-    private fun send(clip: Clip, seq: Int, announce: Boolean) = scope.launch {
+    private fun send(clip: Clip, seq: Int, announce: Boolean, secret: Boolean = false) = scope.launch {
         val what = when (clip) {
+            is Clip.Text if secret -> L("секретный текст", "secret text")
+            is Clip.Image if secret -> L("секретная картинка", "secret image")
             is Clip.Text -> L("текст ${clip.text.length} зн.", "text, ${clip.text.length} chars")
             is Clip.Image -> L("картинка ${sizeText(clip.bytes.size.toLong())}", "image ${sizeText(clip.bytes.size.toLong())}")
             is Clip.Files -> return@launch
@@ -622,7 +632,7 @@ class Room(
         var attempt = 0
         while (true) {
             val failure = try {
-                publishContent(clip = clip, mid = mid)
+                publishContent(clip = clip, mid = mid, secret = secret)
                 null
             } catch (error: CancellationException) {
                 throw error
@@ -630,10 +640,10 @@ class Room(
                 error
             }
             if (failure == null) {
-                when (clip) {
-                    is Clip.Text -> history.addText(text = clip.text, incoming = false, device = "")
-                    is Clip.Image -> history.addImage(bytes = clip.bytes, mime = clip.mime, incoming = false, device = "")
-                    is Clip.Files -> Unit
+                when {
+                    secret -> Unit
+                    clip is Clip.Text -> history.addText(text = clip.text, incoming = false, device = "")
+                    clip is Clip.Image -> history.addImage(bytes = clip.bytes, mime = clip.mime, incoming = false, device = "")
                 }
                 Log.write("→ room: $what")
                 if (announce) notifier.notify(L("Отправил: $what", "Sent: $what"))
@@ -654,10 +664,10 @@ class Room(
         }
     }
 
-    private suspend fun publishContent(clip: Clip, mid: String) {
+    private suspend fun publishContent(clip: Clip, mid: String, secret: Boolean) {
         val conf = settings
         val cipher = ClipCipher.fromBase64(key = conf.key)
-        val base = ClipMeta(kind = ClipMeta.TEXT, source = Platform.source, device = conf.deviceName, sender = conf.deviceId, messageId = mid)
+        val base = ClipMeta(kind = ClipMeta.TEXT, source = Platform.source, device = conf.deviceName, sender = conf.deviceId, messageId = mid, sensitive = secret.takeIf { it })
         when (clip) {
             is Clip.Text -> {
                 val bytes = clip.text.toByteArray()
