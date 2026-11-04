@@ -443,7 +443,7 @@ private fun OnboardingWindow(store: SettingsStore, askingToken: Boolean, onDone:
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    OutlinedTextField(value = invite, onValueChange = { invite = it }, label = { Text(L("Адрес и код", "Address and code")) }, placeholder = { Text("tossling.example.com/7KQ2-M9XD") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = invite, onValueChange = { invite = it }, label = { Text(L("Адрес и код", "Address and code")) }, placeholder = { Text("tossling.example.com/7KQ2M-9XDRT") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 } else {
                     Text(
                         text = if (askingToken) {

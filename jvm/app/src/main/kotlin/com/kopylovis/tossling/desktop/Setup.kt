@@ -97,11 +97,15 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
 
     suspend fun join(input: String): String {
         val (address, code) = parseJoin(input) ?: throw SetupException(
-            L("Нужен адрес и код, например tossling.example.com/7KQ2-M9XD", "An address and a code are needed, for example tossling.example.com/7KQ2-M9XD"),
+            L("Нужен адрес и код, например tossling.example.com/7KQ2M-9XDRT", "An address and a code are needed, for example tossling.example.com/7KQ2M-9XDRT"),
         )
         val server = serverOf(address)
-        val topics = if (client.tosslingHealth(endpoint = Endpoint(server = server))?.isTossling == true) Invites.topics(code = code) else listOf(Invites.topic(code = code, prefix = OLD_ROOM_PREFIX))
-        val key = withContext(Dispatchers.Default) { Invites.key(code = code) }
+        val isTossling = client.tosslingHealth(endpoint = Endpoint(server = server))?.isTossling == true
+        // A version 2 topic and key come from PBKDF2 (600,000 rounds): both are worked out off the calling thread.
+        val (topics, key) = withContext(Dispatchers.Default) {
+            val topics = if (isTossling) Invites.topics(code = code) else listOf(Invites.topic(code = code, prefix = OLD_ROOM_PREFIX))
+            topics to Invites.key(code = code)
+        }
         val found = CompletableDeferred<Pair<Invite, String>>()
         val listener = CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -181,8 +185,12 @@ class Setup(private val store: SettingsStore, private val client: NtfyClient = N
             val target = input.trim().removePrefix("tossling join").removePrefix("tossy join").trim()
             val address = target.substringBeforeLast('/', "")
             val code = target.substringAfterLast('/')
-            if (address.isBlank() || !Regex("^[0-9A-Za-z]{4}-?[0-9A-Za-z]{4}$").matches(code)) return null
+            if (address.isBlank() || !isInviteCode(code)) return null
             return address to code
         }
+
+        /** 10 letters and digits are a version 2 code, 8 a version 1 code of an older app; dashes and case do not matter. */
+        fun isInviteCode(code: String): Boolean =
+            Regex("^[0-9A-Za-z-]+$").matches(code) && Invites.normalized(code).length in setOf(Invites.CODE_LENGTH, Invites.V1_CODE_LENGTH)
     }
 }
