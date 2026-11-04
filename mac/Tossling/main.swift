@@ -473,6 +473,25 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("download mark: a received file carries com.apple.quarantine",
           markLength > 0 && String(decoding: mark.prefix(markLength), as: UTF8.self).hasPrefix("0083;6ac5fc00;Tossling;"))
     check("download mark: a missing file is left alone", !markDownloaded(scratch.appendingPathComponent("missing")))
+    let wifi = PathShape(satisfied: true, interfaces: ["en0:wifi"], gateways: ["192.168.1.1:0"])
+    let otherWifi = PathShape(satisfied: true, interfaces: ["en0:wifi"], gateways: ["10.0.0.1:0"])
+    let offline = PathShape(satisfied: false, interfaces: [], gateways: [])
+    var paths = PathChanges()
+    paths.note(wifi)
+    check("network: the first path does not reconnect", !paths.settle())
+    paths.note(wifi)
+    check("network: the same path again does not reconnect", !paths.settle())
+    paths.note(offline)
+    paths.note(PathShape(satisfied: true, interfaces: ["en0:wifi", "utun3:other"], gateways: ["192.168.1.1:0"]))
+    paths.note(otherWifi)
+    check("network: a burst of changes reconnects once", paths.settle() && !paths.settle())
+    paths.note(offline)
+    check("network: no reconnect while offline", !paths.settle())
+    paths.note(otherWifi)
+    check("network: coming back online reconnects", paths.settle())
+    paths.note(offline)
+    paths.note(otherWifi)
+    check("network: Wi-Fi dropping and coming back reconnects", paths.settle())
     try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
@@ -2102,6 +2121,8 @@ func handle(_ event: [String: Any], primary: Bool) {
 
 final class Stream: NSObject, URLSessionDataDelegate {
     var session: URLSession!
+    var task: URLSessionDataTask?
+    var pending: DispatchWorkItem?
     var buffer = Data()
     var retry = 1.0
     var sent: (request: URLRequest, at: Double)?
@@ -2119,6 +2140,8 @@ final class Stream: NSObject, URLSessionDataDelegate {
     }
 
     func connect() {
+        pending?.cancel()
+        pending = nil
         var path = "\(topic)/json"
         path += lastID.isEmpty || !primary ? "?since=\(Int(staleAfter))s" : "?since=\(lastID)"
         buffer = Data()
@@ -2126,15 +2149,25 @@ final class Stream: NSObject, URLSessionDataDelegate {
         if let refused = Gate.shared.refusal(for: next) {
             if primary { connected = false }
             writeState()
-            DispatchQueue.main.asyncAfter(deadline: .now() + refused.wait) { self.connect() }
+            connect(after: refused.wait)
             return
         }
         sent = (next, Date().timeIntervalSince1970)
-        session.dataTask(with: next).resume()
+        let started = session.dataTask(with: next)
+        task = started
+        started.resume()
+    }
+
+    private func connect(after delay: Double) {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.connect() }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard dataTask === task else { return completionHandler(.cancel) }
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if let sent = sent { Gate.shared.note(sent.request, code: code, sentAt: sent.at) }
         if code == 200 {
@@ -2151,6 +2184,7 @@ final class Stream: NSObject, URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard dataTask === task else { return }
         buffer.append(data)
         while let nl = buffer.firstIndex(of: 0x0A) {
             let line = buffer[buffer.startIndex..<nl]
@@ -2161,17 +2195,24 @@ final class Stream: NSObject, URLSessionDataDelegate {
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    func urlSession(_ session: URLSession, task finished: URLSessionTask, didCompleteWithError error: Error?) {
+        guard finished === task else { return }
+        task = nil
         if primary && connected { log(L("связь с сервером прервалась\(error.map { ": \($0.localizedDescription)" } ?? "")", "the connection to the server broke\(error.map { ": \($0.localizedDescription)" } ?? "")")) }
         if primary { connected = false }
         writeState()
         let delay = retry
         retry = min(retry * 2, 60)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { self.connect() }
+        connect(after: delay)
     }
 
+    /// Drops the current connection, or the wait before the next attempt, and connects again right away.
     func reconnect() {
-        session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+        let old = task
+        task = nil
+        old?.cancel()
+        retry = 1
+        connect()
     }
 }
 
@@ -2283,10 +2324,27 @@ Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
     }
 }
 
+var lastNetworkChecks = Date().timeIntervalSince1970
+
+/// After a wake or a network change: the streams connect again at once, and at most every 10 minutes the server-move
+/// and own-token checks run too, since the new network may be the first that reaches the server.
+func reconnectAll(_ reason: String) {
+    log(reason)
+    streams.forEach { $0.reconnect() }
+    Alerts.shared.renew()
+    let now = Date().timeIntervalSince1970
+    guard now - lastNetworkChecks >= 600 else { return }
+    lastNetworkChecks = now
+    ensureOwnToken()
+    followServerMove()
+}
+
 NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil,
                                                   queue: .main) { _ in
-    streams.forEach { $0.reconnect() }
+    reconnectAll(L("проснулся: переподключаюсь", "woke up: reconnecting"))
 }
+NetworkWatch.shared.onChange = { reconnectAll(L("сеть сменилась: переподключаюсь", "the network changed: reconnecting")) }
+NetworkWatch.shared.start()
 
 Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in writeState() }
 writeState()
