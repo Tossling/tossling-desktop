@@ -606,7 +606,9 @@ class Room(
         when (clip) {
             is Clip.Text -> {
                 val bytes = clip.text.toByteArray()
-                if (bytes.size <= INLINE_LIMIT) publish(meta = base.copy(text = clip.text), body = null) else publish(meta = base, body = cipher.seal(plain = bytes))
+                val inline = if (bytes.size <= INLINE_LIMIT) inlineEnvelope(cipher = cipher, meta = base.copy(text = clip.text)) else null
+                if (inline != null) client.publish(endpoint = conf.endpoint, topic = conf.room, message = inline, body = null)
+                else publish(meta = base, body = cipher.seal(plain = bytes))
             }
 
             is Clip.Image -> publish(meta = base.copy(kind = ClipMeta.IMAGE, mime = clip.mime), body = cipher.seal(plain = clip.bytes))
@@ -769,7 +771,8 @@ class Room(
         private const val ROOM_BYTES = 12
         private const val STALE_SECONDS = 15 * 60
         private const val FILE_STALE_SECONDS = 3 * 60 * 60
-        private const val INLINE_LIMIT = 2_400
+        internal const val INLINE_LIMIT = 2_400
+        private const val MESSAGE_LIMIT = 4_096
         private const val MAX_TEXT = 1_000_000
         private const val MAX_FILE = 500_000_000L
         private const val BIG_FILE = 5_000_000L
@@ -786,6 +789,12 @@ class Room(
         private const val DAY_SECONDS = 86_400
         private val NO_CACHE = mapOf("X-Cache" to "no")
         private val RETRY_MS = longArrayOf(3_000, 10_000, 30_000, 60_000, 120_000, 300_000)
+
+        // ntfy keeps a body of up to 4,096 bytes as the message and turns a longer one into an attachment that no
+        // receiver can open. Escaping, encryption and Base64 can take 2,400 bytes of text past that, so the sealed
+        // envelope decides.
+        internal fun inlineEnvelope(cipher: ClipCipher, meta: ClipMeta): String? =
+            cipher.sealToText(plain = SyncJson.encodeToString(ClipMeta.serializer(), meta).toByteArray()).takeIf { it.length <= MESSAGE_LIMIT }
     }
 }
 
