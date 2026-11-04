@@ -718,6 +718,9 @@ var phone = ""
 var phoneAt = 0.0
 var moved = false
 var members = [String: [String: Any]]()
+// Set once this Mac has moved to a new room and waits to restart: events still coming in on the old room's stream must
+// not touch the state of the new one.
+var switchingRoom = false
 
 func readSavedID() {
     guard !stateFile.isEmpty, let data = FileManager.default.contents(atPath: stateFile),
@@ -1531,6 +1534,11 @@ func control(_ kind: String, _ meta: [String: Any]) -> Bool {
         let saved = rewriteConfig { raw in moveRoom(&raw, room: room, key: key, token: opened?.token) }
         lastID = ""
         handledIDs = []
+        if saved {
+            // The state is saved under the room it belongs to; with the old one the restart would throw the kept members away.
+            switchingRoom = true
+            reloadConfig()
+        }
         writeState()
         log(saved ? L("\(from) отключил одно из устройств: комната сменила ключ, перезапускаюсь", "\(from) disconnected a device: the room has a new key, restarting") : L("не записал новый ключ комнаты в \(configFile)", "could not save the new room key to \(configFile)"))
         if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } }
@@ -1633,7 +1641,7 @@ func alreadyHandled(_ id: String, in ids: inout [String], keep: Int) -> Bool {
 }
 
 func handle(_ event: [String: Any], primary: Bool) {
-    guard event["event"] as? String == "message", let id = event["id"] as? String else { return }
+    guard !switchingRoom, event["event"] as? String == "message", let id = event["id"] as? String else { return }
     guard !alreadyHandled(id, in: &handledIDs, keep: handledKeep) else {
         log(L("пропустил повтор \(id)", "skipped a repeat of \(id)"))
         return
