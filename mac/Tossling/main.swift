@@ -277,6 +277,32 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("the first key is kept", storedKey(known: "", offered: pkA, renew: false) == pkA && storedKey(known: pkA, offered: pkB, renew: false) == pkA)
     check("a fresh re hello changes the key", storedKey(known: pkA, offered: pkB, renew: true) == pkB)
     check("no key does not erase a known one", storedKey(known: pkA, offered: "", renew: true) == pkA)
+    let pkC = Data(repeating: 3, count: 32).base64EncodedString()
+    let keysMet = updatedKeys(["name": "Pixel"], offered: pkA, renew: false, now: 10)
+    check("the first key is not a change", keysMet["pk"] as? String == pkA && keysMet["first_pk"] as? String == pkA && keysMet["key_changed"] == nil)
+    check("the same key again is not a change", updatedKeys(keysMet, offered: pkA, renew: true, now: 20)["key_changed"] == nil)
+    check("another key without a fresh re hello is ignored", updatedKeys(keysMet, offered: pkB, renew: false, now: 20)["pk"] as? String == pkA
+          && updatedKeys(keysMet, offered: pkB, renew: false, now: 20)["key_changed"] == nil)
+    let keysChanged = updatedKeys(keysMet, offered: pkB, renew: true, now: 30)
+    check("a fresh re hello with another key is taken and marked", keysChanged["pk"] as? String == pkB && keysChanged["first_pk"] as? String == pkA
+          && keysChanged["key_changed"] as? Double == 30)
+    check("the mark keeps its time", updatedKeys(keysChanged, offered: pkB, renew: true, now: 40)["key_changed"] as? Double == 30
+          && updatedKeys(keysChanged, offered: "", renew: false, now: 40)["key_changed"] as? Double == 30)
+    check("a third key moves the mark", updatedKeys(keysChanged, offered: pkC, renew: true, now: 50)["key_changed"] as? Double == 50)
+    check("going back to the accepted key clears the mark", updatedKeys(keysChanged, offered: pkA, renew: true, now: 60)["key_changed"] == nil)
+    let keysAccepted = acceptedKey(keysChanged)
+    check("accepting the key clears the mark", keysAccepted["key_changed"] == nil && keysAccepted["first_pk"] as? String == pkB
+          && updatedKeys(keysAccepted, offered: pkB, renew: true, now: 70)["key_changed"] == nil)
+    check("a member saved before first_pk counts its key as accepted", updatedKeys(["pk": pkA], offered: pkB, renew: true, now: 80)["first_pk"] as? String == pkA
+          && updatedKeys(["pk": pkA], offered: pkA, renew: true, now: 80)["key_changed"] == nil)
+    let roomMembers: [String: [String: Any]] = ["me": ["pk": pkA], "gone": [:], "ok": ["pk": pkA], "old": ["pk": ""], "legacy-android-Pixel": ["pk": pkB],
+                                         "moved": ["pk": pkC, "first_pk": pkA, "key_changed": 1.0]]
+    let removalBlocked = removalCheck(roomMembers, removing: "gone", me: "me")
+    check("removal names remaining devices without a key", removalBlocked.noKey == ["legacy-android-Pixel", "old"])
+    check("removal names remaining devices whose key changed", removalBlocked.changed == ["moved"])
+    let removalClear = removalCheck(roomMembers.filter { ["me", "gone", "ok"].contains($0.key) }, removing: "gone", me: "me")
+    check("removal goes on when every remaining device has a key", removalClear.noKey.isEmpty && removalClear.changed.isEmpty)
+    check("the removed device and this Mac do not block a removal", removalCheck(["me": [:], "gone": [:], "ok": ["pk": pkA]], removing: "gone", me: "me").noKey.isEmpty)
     let gateFile = scratch.appendingPathComponent("refusals.json").path
     var now = 1_000_000.0
     let gate = Gate(file: gateFile)
@@ -1537,10 +1563,20 @@ func remember(_ meta: [String: Any], fresh: Bool = false) -> Bool {
     let source = meta["src"] as? String ?? "android"
     let id = meta["id"] as? String ?? "legacy-\(source)-\(name)"
     let isNew = members[id] == nil
-    let known = members[id]?["pk"] as? String ?? ""
     let offered = (meta["pk"] as? String).flatMap { Data(base64Encoded: $0)?.count == 32 ? $0 : nil } ?? ""
     let renewed = fresh && meta["re"] as? Bool == true && meta["k"] as? String == "hello"
-    members[id] = ["name": name, "src": source, "seen": Date().timeIntervalSince1970, "pk": storedKey(known: known, offered: offered, renew: renewed)]
+    var member = members[id] ?? [:]
+    let wasChanged = member["key_changed"] as? Double
+    member["name"] = name
+    member["src"] = source
+    member["seen"] = Date().timeIntervalSince1970
+    member = updatedKeys(member, offered: offered, renew: renewed, now: Date().timeIntervalSince1970)
+    members[id] = member
+    if let changed = member["key_changed"] as? Double, changed != wasChanged {
+        let shown = shownName(meta, name)
+        log(L("у \(shown) сменился ключ: принят по hello с re, отмечен в «Устройствах»", "the key of \(shown) changed: taken from a hello with re, marked in Devices"))
+        notify(L("У \(shown) сменился ключ. Если устройство не переустанавливали, проверь его в «Устройствах»", "The key of \(shown) changed. If the device was not reinstalled, check it in Devices"))
+    }
     if !isComputer(source) {
         if conf.listenTopics.first == conf.room && meta["id"] != nil { moved = true }
         phone = name
@@ -1803,6 +1839,32 @@ func contentAge(eventTime: Double, ts: Any?, now: Double) -> Double {
 func storedKey(known: String, offered: String, renew: Bool) -> String {
     guard !offered.isEmpty else { return known }
     return known.isEmpty || renew ? offered : known
+}
+
+/// A member's key fields after a message that offers `offered`. Any member can send a re hello in another device's name,
+/// so a change is never silent: `first_pk` keeps the key the user last accepted (the first one seen), and while the
+/// stored `pk` differs from it the member carries `key_changed`, the time of the change.
+func updatedKeys(_ member: [String: Any], offered: String, renew: Bool, now: Double) -> [String: Any] {
+    var out = member
+    let known = member["pk"] as? String ?? ""
+    let pk = storedKey(known: known, offered: offered, renew: renew)
+    let first = (member["first_pk"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (known.isEmpty ? pk : known)
+    out["pk"] = pk
+    out["first_pk"] = first.isEmpty ? nil : first
+    if pk.isEmpty || pk == first {
+        out["key_changed"] = nil
+    } else if pk != known || out["key_changed"] == nil {
+        out["key_changed"] = now
+    }
+    return out
+}
+
+/// The member after the user accepted its current key: the mark goes and the key counts as the accepted one.
+func acceptedKey(_ member: [String: Any]) -> [String: Any] {
+    var out = member
+    if let pk = member["pk"] as? String, !pk.isEmpty { out["first_pk"] = pk }
+    out["key_changed"] = nil
+    return out
 }
 
 /// True when the event with this id was handled already; otherwise remembers it.

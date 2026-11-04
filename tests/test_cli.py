@@ -369,6 +369,21 @@ class CliTest(unittest.TestCase):
         self.write(os.path.join(self.home, ".cache", "tossling", "refusals.json"), {"address https://ntfy.example.com": {"n": 2, "until": time.time() + 120}})
         self.assertIn("слишком много запросов, сервер просит подождать", self.run_tossling("status").stdout)
 
+    def test_status_marks_a_changed_key(self):
+        self.fake_helper()
+        self.write(self.config, {"server": "https://ntfy.example.com", "token": "tk_test", "room": "tossy-x", "key": "k", "device_id": "d"})
+        state = os.path.join(self.home, ".cache", "tossling", "state.json")
+        with open(state) as f:
+            s = json.load(f)
+        now = time.time()
+        s["members"] = {"a": {"name": "Pixel", "src": "android", "seen": now, "pk": "x", "first_pk": "y", "key_changed": now},
+                        "b": {"name": "Studio", "src": "mac", "seen": now - 10, "pk": "z", "first_pk": "z"}}
+        self.write(state, s)
+        out = self.run_tossling("status", lang="en").stdout
+        self.assertIn("Pixel (phone, ", out)
+        self.assertIn(", key changed)", out)
+        self.assertEqual(out.count("key changed"), 1)
+
     def device_server(self, devices):
         calls = []
         issued = []

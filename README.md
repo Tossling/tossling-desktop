@@ -207,7 +207,9 @@ and Thunar items stay until the first click, which deletes all of them.
   and a new key, sealed for each remaining device (X25519, HKDF-SHA256 and AES-GCM), and to a new server token that
   does not expire. If the new key does not reach the room, the new token is deleted and the room stays as it was. The
   old token is deleted after a day, unless it is set in the server's configuration. On a server that gives devices
-  tokens of their own, the disconnected device's own token is deleted right after the new key is out.
+  tokens of their own, the disconnected device's own token is deleted right after the new key is out. A device is not
+  disconnected while another one in the room has not sent its key yet (an older version, or one not opened since), and
+  Devices marks a device whose key changed until you accept the new key there; disconnecting warns about such devices.
 - The server never sees the clipboard. It knows which room channels are used and when.
 - Some things are never sent by themselves. These are items password managers mark as concealed
   (`org.nspasteboard.ConcealedType` and friends), Apple's Universal Clipboard (`com.apple.is-remote-clipboard`), files

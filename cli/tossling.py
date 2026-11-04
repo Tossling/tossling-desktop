@@ -868,7 +868,7 @@ def status():
     print(t("  токен: свой у этого Mac", "  token: this Mac's own") if conf.get("own") else t("  токен: общий токен комнаты", "  token: the room's shared token"))
     others = room_devices(conf, s)
     if others:
-        names = [t(f"{d['title']} ({own(d)}{d['kind'] or 'телефон'}, {ago(d['seen'])})", f"{d['title']} ({own(d)}{d['kind'] or 'phone'}, {ago(d['seen'])})") for d in others]
+        names = [t(f"{d['title']} ({own(d)}{d['kind'] or 'телефон'}, {ago(d['seen'])}{', ключ сменился' if d['key_changed'] else ''})", f"{d['title']} ({own(d)}{d['kind'] or 'phone'}, {ago(d['seen'])}{', key changed' if d['key_changed'] else ''})") for d in others]
         print(t(f"  устройства в комнате: {', '.join(names)}", f"  devices in the room: {', '.join(names)}"))
     else:
         print(t(f"  телефон: {s.get('phone') or 'ещё не подключался — tossling pair'}", f"  phone: {s.get('phone') or 'not paired yet: tossling pair'}"))
@@ -904,7 +904,7 @@ def room_devices(conf, state):
             continue
         name = m.get("name", "?")
         out.append({"id": key, "name": name, "title": aliases.get(key) or name, "kind": COMPUTERS.get(m.get("src", "")),
-                    "seen": m.get("seen") or 0})
+                    "seen": m.get("seen") or 0, "key_changed": bool(m.get("key_changed"))})
     return sorted(out, key=lambda d: -d["seen"])
 
 
