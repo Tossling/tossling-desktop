@@ -8,6 +8,7 @@ import com.sun.jna.platform.win32.WinReg
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Image
 import java.awt.MouseInfo
@@ -17,6 +18,7 @@ import java.awt.TrayIcon
 import java.awt.Window
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.geom.Arc2D
 import java.awt.geom.Ellipse2D
 import java.awt.image.BaseMultiResolutionImage
 import java.awt.image.BufferedImage
@@ -32,11 +34,16 @@ interface TrayHost {
     fun install(): Boolean
     fun remove()
     fun notify(text: String)
+
+    /** [percent] of the active transfers, null when there are none: the icon goes back to normal. [tip] says what is on its way. */
+    fun showTransfers(percent: Int?, tip: String?) = Unit
 }
 
 class AppTray(private val build: () -> List<MenuEntry>, private val onOpen: () -> Unit) : TrayHost {
 
     private var icon: TrayIcon? = null
+
+    @Volatile private var percent: Int? = null
     private val _shown = MutableStateFlow(false)
 
     override val shown: StateFlow<Boolean> = _shown.asStateFlow()
@@ -70,7 +77,19 @@ class AppTray(private val build: () -> List<MenuEntry>, private val onOpen: () -
         icon?.displayMessage("Tossling", text, TrayIcon.MessageType.NONE)
     }
 
-    private fun glyph(): Image = TrayGlyph.image(size = SystemTray.getSystemTray().trayIconSize.width.coerceAtLeast(16))
+    override fun showTransfers(percent: Int?, tip: String?) {
+        this.percent = percent
+        SwingUtilities.invokeLater {
+            val trayIcon = icon ?: return@invokeLater
+            trayIcon.image = glyph()
+            trayIcon.toolTip = tip?.let { "Tossling — $it" } ?: "Tossling"
+        }
+    }
+
+    private fun glyph(): Image {
+        val size = SystemTray.getSystemTray().trayIconSize.width.coerceAtLeast(16)
+        return percent?.let { TrayGlyph.progress(size = size, fraction = it / 100.0) } ?: TrayGlyph.image(size = size)
+    }
 
     private fun open() {
         if (MenuTheme.ensure()) icon?.image = glyph()
@@ -103,15 +122,46 @@ object TrayGlyph {
     private const val BALL = 3.8
     private const val FILL = 0.8
     private val SCALES = listOf(1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+    private const val INNER = 0.7
+    private const val TRACK_ALPHA = 80
 
     fun image(size: Int): Image = BaseMultiResolutionImage(*SCALES.map { draw(size = Math.round(size * it).toInt()) }.toTypedArray())
+
+    fun progress(size: Int, fraction: Double): Image = BaseMultiResolutionImage(*SCALES.map { drawProgress(size = Math.round(size * it).toInt(), fraction = fraction) }.toTypedArray())
+
+    /** The icon a little smaller inside a ring: a faint full circle and an arc from the top, clockwise, for the done share. */
+    fun drawProgress(size: Int, fraction: Double): BufferedImage {
+        val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+        val graphics = image.createGraphics()
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+        val inner = draw(size = Math.round(size * INNER).toInt())
+        graphics.drawImage(inner, (size - inner.width) / 2, (size - inner.height) / 2, null)
+        val color = color()
+        val width = maxOf(1.5f, size / 11f)
+        val inset = width / 2.0 + 0.25
+        val box = Ellipse2D.Double(inset, inset, size - 2 * inset, size - 2 * inset)
+        graphics.stroke = BasicStroke(width)
+        graphics.color = Color(color.red, color.green, color.blue, TRACK_ALPHA)
+        graphics.draw(box)
+        val share = fraction.coerceIn(0.0, 1.0)
+        if (share > 0) {
+            graphics.stroke = BasicStroke(width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            graphics.color = color
+            graphics.draw(Arc2D.Double(box.x, box.y, box.width, box.height, 90.0, -360.0 * share, Arc2D.OPEN))
+        }
+        graphics.dispose()
+        return image
+    }
+
+    private fun color(): Color = if (SystemTheme.isLight) Color(0x1F, 0x1F, 0x1F) else Color.WHITE
 
     fun draw(size: Int): BufferedImage {
         val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         val graphics = image.createGraphics()
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
         graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
-        graphics.color = if (SystemTheme.isLight) Color(0x1F, 0x1F, 0x1F) else Color.WHITE
+        graphics.color = color()
         graphics.translate(size * (1 - FILL) / 2, size * (1 - FILL) / 2)
         graphics.scale(size * FILL / 18.0, size * FILL / 18.0)
         DOTS.forEach { (x, y) -> graphics.fill(Ellipse2D.Double(x - 3 - DOT, y - 3 - DOT, 2 * DOT, 2 * DOT)) }

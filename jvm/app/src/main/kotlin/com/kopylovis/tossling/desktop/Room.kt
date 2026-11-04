@@ -79,6 +79,7 @@ class Room(
     private val client: NtfyClient = NtfyClient(),
     stateFile: File = File(Platform.home, "state.json"),
     private val downloads: () -> File = { Platform.downloads },
+    val transfers: Transfers = Transfers(),
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error -> Log.write("failed: $error") })
@@ -540,22 +541,27 @@ class Room(
         val target = uniqueFile(dir = downloads(), name = name)
         Log.write("← $from: receiving the file $name (${sizeText(size)})")
         if (size >= BIG_FILE) notifier.notify(L("Получаю «$name» (${sizeText(size)}) от $from…", "Receiving «$name» (${sizeText(size)}) from $from…"))
+        val transfer = transfers.start(name = name, incoming = true, total = size)
         val received = try {
             if (meta.format == ClipCipher.STREAM_FORMAT) {
                 client.downloadTo(endpoint = settings.endpoint, url = url) { input ->
-                    target.outputStream().buffered().use { output -> cipher.openStream(input = input, output = output) {} }
+                    target.outputStream().buffered().use { output -> cipher.openStream(input = input, output = output, onChunk = transfer::progress) }
                 }
             } else {
                 // An old-style file is sealed as one piece and opened in memory, so it has a limit.
                 val sealed = client.download(endpoint = settings.endpoint, url = url, maxBytes = AttachmentLimits.of(ClipMeta.FILE))
+                if (transfer.isCancelled) throw TransferCancelled()
                 target.writeBytes(cipher.open(sealed = sealed))
             }
             target.length()
-        } catch (error: CancellationException) {
-            target.delete()
-            throw error
         } catch (error: Throwable) {
             target.delete()
+            if (transfer.isCancelled) {
+                Log.write("cancelled receiving the file $name from $from")
+                notifier.notify(L("Получение «$name» от $from отменено", "Receiving «$name» from $from was cancelled"))
+                return
+            }
+            if (error is CancellationException) throw error
             val gone = error is NtfyException && (error.code == 404 || error.code == 410)
             val reason = when {
                 gone -> L("сервер его уже удалил, отправьте ещё раз", "the server has already deleted it, send it again")
@@ -566,6 +572,8 @@ class Room(
             Log.write("did not receive the file $name from $from: $reason")
             notifier.notify(L("Не получил «$name» от $from: $reason", "Did not receive «$name» from $from: $reason"))
             return
+        } finally {
+            transfer.end()
         }
         if (fresh) copyAgain(Clip.Files(listOf(target)))
         history.addFile(file = target, size = received, incoming = true, device = from)
@@ -729,16 +737,25 @@ class Room(
         val mime = runCatching { Files.probeContentType(file.toPath()) }.getOrNull() ?: "application/octet-stream"
         val meta = ClipMeta(kind = ClipMeta.FILE, mime = mime, source = Platform.source, device = conf.deviceName, sender = conf.deviceId, fileName = name, format = ClipCipher.STREAM_FORMAT, size = size)
         if (size >= BIG_FILE) notifier.notify(L("Отправляю «$name» (${sizeText(size)})…", "Sending «$name» (${sizeText(size)})…"))
+        val transfer = transfers.start(name = name, incoming = false, total = size)
         try {
+            // A cancel stops the upload short of its announced length, so the server drops it and nothing is published.
             client.publishStream(endpoint = conf.endpoint, topic = conf.room, message = cipher.sealToText(plain = encode(stamp(meta = meta, nowMs = now()))), length = ClipCipher.sealedSize(size)) { output ->
-                file.inputStream().buffered().use { input -> cipher.sealStream(input = input, output = output, size = size) {} }
+                file.inputStream().buffered().use { input -> cipher.sealStream(input = input, output = output, size = size, onChunk = transfer::progress) }
             }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            Log.write("did not send the file $name: ${error.message}")
-            notifier.notify(L("Не отправил «$name»: ${error.message}", "Did not send «$name»: ${error.message}"))
+        } catch (error: Throwable) {
+            if (transfer.isCancelled) {
+                Log.write("cancelled sending the file $name (${sizeText(size)})")
+                notifier.notify(L("Отправка «$name» отменена", "Sending «$name» was cancelled"))
+                return
+            }
+            if (error is CancellationException) throw error
+            val reason = if (error is OutOfMemoryError) L("не хватило памяти", "not enough memory") else error.message ?: error.toString()
+            Log.write("did not send the file $name: $reason")
+            notifier.notify(L("Не отправил «$name»: $reason", "Did not send «$name»: $reason"))
             return
+        } finally {
+            transfer.end()
         }
         history.addFile(file = file, size = size, incoming = false, device = "")
         Log.write("→ room: the file $name (${sizeText(size)})")
