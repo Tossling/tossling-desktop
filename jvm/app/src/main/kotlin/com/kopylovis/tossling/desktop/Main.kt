@@ -49,6 +49,7 @@ import androidx.compose.ui.window.rememberWindowState
 import com.kopylovis.tossling.protocol.ClipKind
 import com.kopylovis.tossling.protocol.Endpoint
 import com.kopylovis.tossling.protocol.Invites
+import com.kopylovis.tossling.protocol.Member
 import com.kopylovis.tossling.protocol.network.ServerRefusal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +68,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import javax.imageio.ImageIO
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
@@ -288,16 +291,21 @@ private class TrayMenu(
         others.forEach { member ->
             val online = now - member.seen < Room.ONLINE_MS
             val state = if (online) L("на связи", "online") else ago(seen = member.seen, now = now)
-            submenu(text = "${if (online) "●" else "○"} ${room.nameOf(member)} — $state") {
+            val keyNote = if (member.keyChanged > 0) L(" · ключ сменился", " · key changed") else ""
+            submenu(text = "${if (online) "●" else "○"} ${room.nameOf(member)} — $state$keyNote") {
                 item(text = L("Переименовать…", "Rename…")) {
                     rename(title = L("Как подписывать «${member.name}» на этом компьютере", "How this computer shows «${member.name}»"), current = room.nameOf(member)) { room.setAlias(id = member.id, alias = it) }
+                }
+                if (member.keyChanged > 0) {
+                    separator()
+                    item(text = L("Ключ сменился ${dateTime(member.keyChanged)}", "Its key changed on ${dateTime(member.keyChanged)}"), enabled = false)
+                    item(text = L("Принять новый ключ…", "Accept the New Key…")) { acceptKey(member) }
+                    separator()
                 }
                 if (refused) {
                     item(text = L("Отключить нельзя, сервер не принимает токен этого компьютера", "Cannot disconnect while the server refuses this computer's token"), enabled = false)
                 } else {
-                    item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) {
-                        tasks.launch { runCatching { room.revoke(member.id) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
-                    }
+                    item(text = L("Отключить от комнаты", "Disconnect from the Room"), enabled = member.id != settings.owner) { disconnect(member) }
                 }
             }
         }
@@ -310,6 +318,62 @@ private class TrayMenu(
         item(text = L("Добавить устройство…", "Add a Device…")) { screens.adding.value = true }
         item(text = L("Новая комната…", "New Room…"), enabled = !creating) { newRoom() }
         item(text = L("Войти в другую комнату…", "Join Another Room…")) { screens.onboarding.value = true }
+    }
+
+    private fun acceptKey(member: Member) {
+        val name = room.nameOf(member)
+        val accept = L("Принять", "Accept")
+        val choice = JOptionPane.showOptionDialog(
+            null,
+            L(
+                "Ключ меняется, когда устройство переустановили или подключили заново. Если этого не было, ключ мог подменить кто-то другой из комнаты: тогда не принимай его, а отключи $name.",
+                "A key changes when the device was reinstalled or paired again. If that did not happen, someone else in the room may have replaced it: then do not accept it, disconnect $name instead.",
+            ),
+            L("Принять новый ключ $name?", "Accept the new key of $name?"),
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+            null,
+            arrayOf(accept, L("Отмена", "Cancel")),
+            accept,
+        )
+        if (choice == 0) room.acceptKey(member.id)
+    }
+
+    private fun disconnect(member: Member) {
+        val name = room.nameOf(member)
+        val missing = room.withoutKey(id = member.id)
+        if (missing.isNotEmpty()) {
+            JOptionPane.showMessageDialog(
+                null,
+                L(
+                    "Нет ключа у: ${room.namesOf(missing)}. Открой Tossling на этом устройстве (оно пришлёт ключ) или обнови его, потом попробуй снова. Без ключа новый ключ комнаты пришлось бы отправить под старым, который знает и $name.",
+                    "No key from: ${room.namesOf(missing)}. Open Tossling on that device (it then sends its key) or update it, and try again. Without a key the new room key would have to go under the old one, which $name knows too.",
+                ),
+                L("Нельзя отключить $name", "Cannot disconnect $name"),
+                JOptionPane.WARNING_MESSAGE,
+            )
+            return
+        }
+        val changed = room.keyChangedAmong(id = member.id)
+        if (changed.isNotEmpty()) {
+            val anyway = L("Всё равно отключить", "Disconnect Anyway")
+            val choice = JOptionPane.showOptionDialog(
+                null,
+                L(
+                    "Внимание: сменился ключ у ${room.namesOf(changed)}. Новый ключ комнаты уйдёт на их новые ключи. Если не знаешь, почему они сменились (переустановка, новое подключение), сначала проверь это.",
+                    "Warning: the key of ${room.namesOf(changed)} changed. The new room key goes to their new keys. If you do not know why they changed (a reinstall, pairing again), check that first.",
+                ),
+                L("Отключить $name?", "Disconnect $name?"),
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                arrayOf(anyway, L("Отмена", "Cancel")),
+                L("Отмена", "Cancel"),
+            )
+            if (choice != 0) return
+        }
+        val accepting = changed.map { it.id }.toSet()
+        tasks.launch { runCatching { room.revoke(id = member.id, accepting = accepting) }.onFailure { notifier.notify(it.message ?: it.toString()) } }
     }
 
     private fun newRoom() {
@@ -385,6 +449,9 @@ private fun openLink(url: String) {
     runCatching { Desktop.getDesktop().browse(URI(url)) }.recoverCatching { ProcessBuilder("xdg-open", url).start() }
         .onFailure { Log.write("could not open $url: ${it.message}") }
 }
+
+private fun dateTime(millis: Long): String =
+    DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withLocale(if (Language.russian) Locale.forLanguageTag("ru") else Locale.ENGLISH).format(Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()))
 
 private fun ago(seen: Long, now: Long): String {
     val minutes = (now - seen) / 60_000

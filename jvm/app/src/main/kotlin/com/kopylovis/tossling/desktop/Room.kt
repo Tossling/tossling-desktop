@@ -23,6 +23,7 @@ import com.kopylovis.tossling.protocol.network.NtfyEvent
 import com.kopylovis.tossling.protocol.network.NtfyException
 import com.kopylovis.tossling.protocol.network.ServerRefusal
 import com.kopylovis.tossling.protocol.network.serverRefusal
+import com.kopylovis.tossling.protocol.room.Removal
 import com.kopylovis.tossling.protocol.serverMoveTarget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -271,32 +272,52 @@ class Room(
         }
     }
 
-    suspend fun revoke(id: String) {
+    /**
+     * The devices that would stay in the room after removing [id] but have no key of their own yet: the removal is
+     * refused until they say hello with one, or the new room key would have to go under the old one.
+     */
+    fun withoutKey(id: String): List<Member> = Removal.withoutKey(members = state.value.value.members.values, removed = id, self = settings.deviceId)
+
+    /** The devices that would stay in the room after removing [id] and whose key changed: the user confirms first. */
+    fun keyChangedAmong(id: String): List<Member> = Removal.keyChanged(members = state.value.value.members.values, removed = id, self = settings.deviceId)
+
+    fun namesOf(members: List<Member>): String = members.joinToString(separator = ", ") { nameOf(it) }
+
+    /** The user accepted the member's current key: the "key changed" mark goes away. */
+    fun acceptKey(id: String) {
+        state.update { current -> current.members[id]?.let { current.copy(members = current.members + (id to it.copy(keyChanged = 0))) } ?: current }
+        state.value.value.members[id]?.let { Log.write("accepted the new key of ${nameOf(it)}") }
+    }
+
+    /**
+     * Disconnects [id]. Refused while a remaining device has no key, and while one has a changed key that is not in
+     * [accepting], the devices the user was warned about and confirmed.
+     */
+    suspend fun revoke(id: String, accepting: Set<String> = emptySet()) {
         val conf = settings
         if (id == conf.owner) throw IllegalStateException(L("Создателя комнаты нельзя отключить", "The creator of the room cannot be disconnected"))
         val members = state.value.value.members
         val name = members[id]?.let(::nameOf) ?: L("устройство", "a device")
-        val others = members.filterKeys { it != id && it != conf.deviceId && !it.startsWith(LEGACY_PREFIX) }
-        val isLegacy = others.values.any { RoomKeys.decodeKey(it.pk) == null }
+        val missing = withoutKey(id = id)
+        if (missing.isNotEmpty()) {
+            Log.write("did not disconnect $name: no key from ${namesOf(missing)}")
+            throw IllegalStateException(L("Не отключил $name: нет ключа у ${namesOf(missing)}. Открой Tossling там или обнови его", "Did not disconnect $name: no key from ${namesOf(missing)}. Open Tossling there or update it"))
+        }
+        val changed = keyChangedAmong(id = id).filter { it.id !in accepting }
+        if (changed.isNotEmpty()) throw IllegalStateException(L("Не отключил $name: у ${namesOf(changed)} сменился ключ, попробуй ещё раз", "Did not disconnect $name: the key of ${namesOf(changed)} changed, try again"))
+        val others = Removal.remaining(members = members.values, removed = id, self = conf.deviceId).associateBy { it.id }
         val room = roomPrefix(server = conf.server) + hex(ROOM_BYTES)
         val key = Base64.getEncoder().encodeToString(ByteArray(ClipCipher.KEY_SIZE).also(random::nextBytes))
-        val token = if (isLegacy || conf.token.isEmpty()) null else runCatching { client.createToken(endpoint = conf.endpoint, label = TOKEN_LABEL) }
+        val token = if (conf.token.isEmpty()) null else runCatching { client.createToken(endpoint = conf.endpoint, label = TOKEN_LABEL) }
             .onFailure { Log.write("kept the old token: ${it.message}") }
             .getOrNull()
         try {
+            // Only sealed keys: the new room never goes in the clear, not even under the old room key. Sealed before
+            // the kick, so a failure stops before anything is published.
+            val sealed = if (others.isEmpty()) null else RoomKeys.seal(secret = RoomSecret(key = key, room = room, token = token), recipients = others.mapValues { it.value.pk })
             publishControl(kind = ClipMeta.KICK, to = listOf(id))
-            if (others.isNotEmpty()) {
-                val sealed = RoomKeys.seal(secret = RoomSecret(key = key, room = room, token = token), recipients = others.mapValues { it.value.pk })
-                publish(
-                    meta = control(kind = ClipMeta.REKEY).copy(
-                        to = others.keys.toList(),
-                        ephemeral = sealed.ephemeral,
-                        keys = sealed.keys,
-                        room = room.takeIf { isLegacy },
-                        key = key.takeIf { isLegacy },
-                    ),
-                    body = null,
-                )
+            if (sealed != null) {
+                publish(meta = control(kind = ClipMeta.REKEY).copy(to = others.keys.toList(), ephemeral = sealed.ephemeral, keys = sealed.keys), body = null)
             }
         } catch (error: Throwable) {
             if (token != null) withContext(NonCancellable) { dropToken(server = conf.server, token = token) }
@@ -725,7 +746,11 @@ class Room(
             current.copy(members = current.members + (id to next))
         }
         val changed = member?.keyChanged ?: 0
-        if (known?.pk?.isNotEmpty() == true && changed > 0 && changed != known?.keyChanged) Log.write("the key of ${shownName(meta)} changed: taken from a fresh hello with re and marked")
+        if (known?.pk?.isNotEmpty() == true && changed > 0 && changed != known?.keyChanged) {
+            val shown = shownName(meta)
+            Log.write("the key of $shown changed: taken from a fresh hello with re and marked in Devices")
+            notifier.notify(L("У $shown сменился ключ. Если устройство не переустанавливали, проверь его в «Устройствах»", "The key of $shown changed. If the device was not reinstalled, check it in Devices"))
+        }
         return known == null
     }
 
