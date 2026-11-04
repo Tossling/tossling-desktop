@@ -754,12 +754,12 @@ def send():
     if targets:
         conf = read_conf()
         devices = room_devices(conf, agent.state() or {})
-        for t in targets:
-            low = t.strip().lower()
+        for target in targets:
+            low = target.strip().lower()
             found = [d for d in devices if low in (d["title"].lower(), d["name"].lower(), d["id"].lower())]
             if not found:
                 names = ", ".join(d["title"] for d in devices) or t("в комнате пока никого", "nobody in the room yet")
-                sys.exit(t(f"Нет устройства «{t}». Есть: {names}", f"No device «{t}». There are: {names}"))
+                sys.exit(t(f"Нет устройства «{target}». Есть: {names}", f"No device «{target}». There are: {names}"))
             ids.append(found[0]["id"])
     if pick and not ids:
         chosen = pick_targets()
