@@ -60,6 +60,7 @@ import kotlinx.serialization.builtins.serializer
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.NetworkInterface
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.security.SecureRandom
@@ -148,13 +149,25 @@ class Room(
         }
         scope.launch {
             var last = System.currentTimeMillis()
+            var addresses = networkAddresses()
             while (isActive) {
                 delay(WAKE_CHECK_MS)
                 val current = System.currentTimeMillis()
-                if (current - last > WAKE_GAP_MS && settings.isConfigured) {
-                    Log.write("the computer woke up: connecting again")
-                    connect()
+                // A new network (another Wi-Fi, a VPN, a cable) leaves the old connection silent until it times out.
+                val found = networkAddresses()
+                when {
+                    !settings.isConfigured -> Unit
+                    current - last > WAKE_GAP_MS -> {
+                        Log.write("the computer woke up: connecting again")
+                        connect()
+                    }
+
+                    networkChanged(before = addresses, after = found) -> {
+                        Log.write("the network changed: connecting again")
+                        connect()
+                    }
                 }
+                if (found != null) addresses = found
                 last = current
             }
         }
@@ -897,7 +910,7 @@ class Room(
         private const val ECHO_MS = 60_000L
         private const val SETTLE_MS = 150L
         private const val FIRST_RETRY_MS = 1_000L
-        private const val WAKE_CHECK_MS = 5_000L
+        private const val WAKE_CHECK_MS = 3_000L
         private const val DUPLICATE_MS = 3_000L
         private const val WAKE_GAP_MS = 30_000L
         private const val MAX_RETRY_MS = 60_000L
@@ -915,6 +928,22 @@ class Room(
         // events this computer has already handled. Returns the latest handled ids with this one, or null for a repeat.
         internal fun afterHandling(handled: List<String>, id: String, keep: Int = HANDLED_KEEP): List<String>? =
             if (id in handled) null else (handled + id).takeLast(keep)
+
+        /**
+         * The addresses of the network interfaces that are up, leaving out loopback and link-local ones (virtual
+         * interfaces of containers come and go with only those), or null when the system would not list them.
+         */
+        internal fun networkAddresses(): Set<String>? = runCatching {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+                .flatMap { network ->
+                    network.inetAddresses.toList().filterNot { it.isLoopbackAddress || it.isLinkLocalAddress }.map { "${network.name} ${it.hostAddress}" }
+                }
+                .toSet()
+        }.getOrNull()
+
+        /** True when both lists are known and differ: the computer moved to another network or lost or gained one. */
+        internal fun networkChanged(before: Set<String>?, after: Set<String>?): Boolean = before != null && after != null && before != after
 
         /**
          * Hands every event to [handle], one at a time, and keeps going whatever one of them throws, an
