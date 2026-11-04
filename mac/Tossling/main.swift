@@ -188,6 +188,33 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
         check(name + " seal", Data(base64Encoded: v["nonce"] ?? "").flatMap { sealedWith(plain, key, $0) } == v["sealed"])
         check(name + " open", opened(v["sealed"] ?? "", key) == plain)
     }
+    check("invite v2 vectors", !(vectors["invite_v2"] as? [[String: String]] ?? []).isEmpty)
+    for v in vectors["invite_v2"] as? [[String: String]] ?? [] {
+        let code = v["code"] ?? ""
+        let name = "invite v2 \(code)"
+        check(name + " code", normalizedCode(code) == v["normalized"] && inviteVersion(code) == 2)
+        let seed = inviteSeedV2(code)
+        check(name + " seed", seed.base64EncodedString() == v["seed"])
+        let secret = inviteSecretV2(seed: seed)
+        check(name + " topic", secret.topic("tossling-") == v["topic"] && secret.topic("tossy-") == v["legacy_topic"])
+        let key = secret.key.withUnsafeBytes { Data($0) }
+        check(name + " key", key.base64EncodedString() == v["key"])
+        let plain = Data((v["plain"] ?? "").utf8)
+        check(name + " seal", Data(base64Encoded: v["nonce"] ?? "").flatMap { sealedWith(plain, key, $0) } == v["sealed"])
+        check(name + " open", opened(v["sealed"] ?? "", key) == plain)
+    }
+    if let v1 = (vectors["invite"] as? [[String: String]])?.first, let secret = inviteSecret(v1["code"] ?? "") {
+        check("invite: an 8-character code joins as version 1", inviteVersion(v1["code"] ?? "") == 1 && secret.topic("tossling-") == v1["topic"]
+              && secret.key.withUnsafeBytes { Data($0) }.base64EncodedString() == v1["key"])
+    } else {
+        check("invite: an 8-character code joins as version 1", false)
+    }
+    check("invite: other lengths are not codes", ["", "7KQ2M9XDR", "7KQ2M9XDRTA", "7KQ-2M9"].allSatisfy { inviteVersion($0) == nil && inviteSecret($0) == nil })
+    let made = (0..<50).map { _ in newInviteCode() }
+    check("invite: new codes are version 2, XXXXX-XXXXX", made.allSatisfy { code in
+        code.count == 11 && code.split(separator: "-").map(\.count) == [5, 5] && inviteVersion(code) == 2
+            && code.allSatisfy { "0123456789ABCDEFGHJKMNPQRSTVWXYZ-".contains($0) }
+    } && Set(made).count == made.count)
     for v in vectors["envelope"] as? [[String: String]] ?? [] {
         let name = "envelope \(v["plain"]?.prefix(40) ?? "")"
         guard let key = Data(base64Encoded: v["key"] ?? ""), let nonce = Data(base64Encoded: v["nonce"] ?? "") else {
@@ -344,21 +371,79 @@ func normalizedCode(_ code: String) -> String {
     code.uppercased().filter { $0.isLetter || $0.isNumber }
 }
 
+func hexString<D: Sequence>(_ bytes: D) -> String where D.Element == UInt8 {
+    bytes.map { String(format: "%02x", $0) }.joined()
+}
+
+func pbkdf2SHA256(_ password: String, salt: String, rounds: UInt32) -> Data {
+    let password = Array(password.utf8)
+    let salt = Array(salt.utf8)
+    var derived = [UInt8](repeating: 0, count: 32)
+    _ = password.withUnsafeBufferPointer { pw in
+        pw.baseAddress!.withMemoryRebound(to: Int8.self, capacity: pw.count) { base in
+            CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), base, pw.count, salt, salt.count,
+                                 CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), rounds, &derived, derived.count)
+        }
+    }
+    return Data(derived)
+}
+
+// Version 1 invite (8-character codes, made by older apps): the topic is a plain hash of the code, so whoever sees it
+// finds the code in minutes. This Mac only joins with such codes and never makes them.
 func inviteTopic(_ code: String, prefix: String) -> String {
     let hash = SHA256.hash(data: Data("tossy-invite-topic:\(normalizedCode(code))".utf8))
-    return prefix + "inv-" + hash.prefix(12).map { String(format: "%02x", $0) }.joined()
+    return prefix + "inv-" + hexString(hash.prefix(12))
 }
 
 func inviteKey(_ code: String) -> SymmetricKey {
-    let password = Array(normalizedCode(code).utf8)
-    let salt = Array("tossy-invite-v1".utf8)
-    var derived = [UInt8](repeating: 0, count: 32)
-    _ = password.withUnsafeBufferPointer { pw in
-        CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), UnsafeRawPointer(pw.baseAddress!).assumingMemoryBound(to: Int8.self),
-                             pw.count, salt, salt.count, CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), 300_000,
-                             &derived, derived.count)
+    SymmetricKey(data: pbkdf2SHA256(normalizedCode(code), salt: "tossy-invite-v1", rounds: 300_000))
+}
+
+// Version 2 invite (10-character codes): the topic and the key both come from a PBKDF2 seed, so the topic name does not
+// give the code away faster than guessing it.
+func inviteSeedV2(_ code: String) -> Data {
+    pbkdf2SHA256(normalizedCode(code), salt: "tossling-invite-v2", rounds: 600_000)
+}
+
+func inviteHKDF(_ seed: Data, _ info: String, _ count: Int) -> Data {
+    HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: seed), salt: Data(), info: Data(info.utf8),
+                           outputByteCount: count).withUnsafeBytes { Data($0) }
+}
+
+struct InviteSecret {
+    let suffix: String
+    let key: SymmetricKey
+
+    func topic(_ prefix: String) -> String { prefix + suffix }
+}
+
+func inviteSecretV2(seed: Data) -> InviteSecret {
+    InviteSecret(suffix: "inv-" + hexString(inviteHKDF(seed, "tossling-invite-topic", 12)),
+                 key: SymmetricKey(data: inviteHKDF(seed, "tossling-invite-key", 32)))
+}
+
+/// The version by the length of the normalized code: 8 is version 1, 10 is version 2, anything else is not a code.
+func inviteVersion(_ code: String) -> Int? {
+    switch normalizedCode(code).count {
+    case 8: return 1
+    case 10: return 2
+    default: return nil
     }
-    return SymmetricKey(data: Data(derived))
+}
+
+func inviteSecret(_ code: String) -> InviteSecret? {
+    switch inviteVersion(code) {
+    case 1: return InviteSecret(suffix: inviteTopic(code, prefix: ""), key: inviteKey(code))
+    case 2: return inviteSecretV2(seed: inviteSeedV2(code))
+    default: return nil
+    }
+}
+
+/// A new invite code: 10 characters of the alphabet (50 bits), shown as XXXXX-XXXXX. Version 1 codes are never made.
+func newInviteCode() -> String {
+    let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    let raw = String((0..<10).map { _ in alphabet.randomElement()! })
+    return "\(raw.prefix(5))-\(raw.suffix(5))"
 }
 
 func runSync(_ request: URLRequest) -> (Int, Data) {
@@ -408,7 +493,11 @@ func trimmedServer(_ server: String) -> String {
 
 if !joinCode.isEmpty {
     let server = trimmedServer(joinServer.hasPrefix("http") ? joinServer : "https://" + joinServer)
-    let topics = channelPrefix(server) == "tossling-" ? [inviteTopic(joinCode, prefix: "tossling-"), inviteTopic(joinCode, prefix: "tossy-")] : [inviteTopic(joinCode, prefix: "tossy-")]
+    guard let secret = inviteSecret(joinCode) else {
+        print(L("код приглашения — 10 букв и цифр вида 7KQ2M-9XDRT (у старых версий 8)", "an invite code is 10 letters and digits like 7KQ2M-9XDRT (8 from older versions)"))
+        exit(2)
+    }
+    let topics = channelPrefix(server) == "tossling-" ? [secret.topic("tossling-"), secret.topic("tossy-")] : [secret.topic("tossy-")]
     var topic = topics[0]
     guard let url = URL(string: "\(server)/\(topics.joined(separator: ","))/json") else {
         print(L("не понял адрес сервера: \(joinServer)", "could not read the server address: \(joinServer)"))
@@ -416,7 +505,7 @@ if !joinCode.isEmpty {
     }
     var r = URLRequest(url: url)
     r.timeoutInterval = 90
-    let key = inviteKey(joinCode)
+    let key = secret.key
     var plain = Data()
     var invite = [String: Any]()
     let result = waitForEvent(r, seconds: 70) { event in
@@ -596,12 +685,16 @@ if !inviteCode.isEmpty {
         print(L("сначала tossling on: старые настройки без комнаты", "run tossling on first: the old settings have no room"))
         exit(2)
     }
-    let topic = inviteTopic(inviteCode, prefix: channelPrefix(conf.server))
+    guard inviteVersion(inviteCode) == 2, let secret = inviteSecret(inviteCode) else {
+        print(L("код приглашения должен быть из 10 знаков", "the invite code must have 10 characters"))
+        exit(1)
+    }
+    let topic = secret.topic(channelPrefix(conf.server))
     var invite: [String: Any] = ["s": conf.server, "t": conf.token, "r": conf.room, "k": conf.keyText,
                                  "n": conf.deviceName, "exp": Date().timeIntervalSince1970 + 600]
     if !conf.owner.isEmpty { invite["o"] = conf.owner }
     guard let plain = try? JSONSerialization.data(withJSONObject: invite),
-          let sealed = try? AES.GCM.seal(plain, using: inviteKey(inviteCode)).combined,
+          let sealed = try? AES.GCM.seal(plain, using: secret.key).combined,
           let url = URL(string: "\(conf.server)/\(topic)"), let roomURL = URL(string: "\(conf.server)/\(conf.room)/json") else {
         print(L("не собрал приглашение", "could not build the invite"))
         exit(1)

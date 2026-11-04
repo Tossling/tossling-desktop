@@ -159,7 +159,7 @@ final class OnboardingModel: ObservableObject {
     func join() {
         let text = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let slash = text.lastIndex(of: "/") else {
-            problem = L("Нужно вида tossling.example.com/ABCD-EFGH", "Expected tossling.example.com/ABCD-EFGH")
+            problem = L("Нужно вида tossling.example.com/7KQ2M-9XDRT", "Expected tossling.example.com/7KQ2M-9XDRT")
             return
         }
         let address = normalizedServer(String(text[..<slash]))
@@ -272,7 +272,7 @@ struct OnboardingView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                field(L("Код приглашения", "Invite code"), text: $model.code, prompt: "tossling.example.com/ABCD-EFGH")
+                field(L("Код приглашения", "Invite code"), text: $model.code, prompt: "tossling.example.com/7KQ2M-9XDRT")
                 problemText
                 HStack {
                     Button(L("Назад", "Back")) { model.problem = ""; model.step = .choose }

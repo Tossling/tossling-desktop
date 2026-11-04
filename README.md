@@ -108,10 +108,10 @@ do not share it or take a screenshot of it.
 
 On a computer that is already in the room choose Devices, then Add a Device in the menu (the same window shows the QR
 code for a phone), or run `tossling invite` on a Mac. Either shows something like
-`tossling join tossling.example.com/ABCD-EFGH`. Within 10 minutes run that on the new Mac, or on Windows and Linux
-choose Join Another Room and paste `tossling.example.com/ABCD-EFGH`. The invite is never stored on the server. The
+`tossling join tossling.example.com/7KQ2M-9XDRT`. Within 10 minutes run that on the new Mac, or on Windows and Linux
+choose Join Another Room and paste `tossling.example.com/7KQ2M-9XDRT`. The invite is never stored on the server. The
 inviting computer keeps sending it uncached while it waits, and the room key inside is encrypted with the code (PBKDF2
-and AES-GCM).
+and AES-GCM). Codes have 10 characters; the 8-character codes of older versions still work for joining.
 
 ## On a completely different Mac
 
