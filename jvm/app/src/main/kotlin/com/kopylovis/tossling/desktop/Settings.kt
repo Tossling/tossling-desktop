@@ -59,6 +59,7 @@ data class RetiredToken(
 data class RoomState(
     val room: String = "",
     @SerialName("last_id") val lastId: String = "",
+    val handled: List<String> = emptyList(),
     val members: Map<String, Member> = emptyMap(),
 )
 

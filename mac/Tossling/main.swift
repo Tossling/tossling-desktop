@@ -203,6 +203,10 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("inline text", sealedInline(inlineMeta, text: String(repeating: "x", count: inlineLimit), key: inlineKey) != nil)
     check("inline text over the message limit after escaping",
           sealedInline(inlineMeta, text: String(repeating: "\"", count: inlineLimit), key: inlineKey) == nil)
+    var seen = [String]()
+    check("a new event is handled", !alreadyHandled("a", in: &seen, keep: 2) && !alreadyHandled("b", in: &seen, keep: 2))
+    check("a repeated event is skipped", alreadyHandled("a", in: &seen, keep: 2))
+    check("only the latest events are kept", !alreadyHandled("c", in: &seen, keep: 2) && seen == ["b", "c"])
     let gateFile = scratch.appendingPathComponent("refusals.json").path
     var now = 1_000_000.0
     let gate = Gate(file: gateFile)
@@ -685,6 +689,11 @@ var receivedCount = 0
 var lastSent = 0.0
 var lastReceived = 0.0
 var lastID = ""
+// ntfy answers since=<id> with the other messages of that id's second too, so a reconnect can bring back events this
+// Mac has already handled. The ids of the latest ones are kept (and saved) to skip them.
+var handledIDs = [String]()
+let handledKeep = 200
+let handledSaved = 50
 var connected = false
 var phone = ""
 var phoneAt = 0.0
@@ -696,6 +705,7 @@ func readSavedID() {
           let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
     if let room = raw["room"] as? String, room != conf.room { return }
     lastID = raw["last_id"] as? String ?? ""
+    handledIDs = raw["handled"] as? [String] ?? []
     phone = raw["phone"] as? String ?? ""
     phoneAt = raw["phone_at"] as? Double ?? 0
     moved = raw["moved"] as? Bool ?? false
@@ -706,7 +716,8 @@ func writeState() {
     guard !stateFile.isEmpty else { return }
     let state: [String: Any] = ["pid": getpid(), "started": Int(started.timeIntervalSince1970),
                                 "sent": sentCount, "received": receivedCount, "last_sent": Int(lastSent),
-                                "last_received": Int(lastReceived), "last_id": lastID, "connected": connected,
+                                "last_received": Int(lastReceived), "last_id": lastID, "handled": Array(handledIDs.suffix(handledSaved)),
+                                "connected": connected,
                                 "phone": phone, "phone_at": phoneAt, "moved": moved, "members": members, "room": conf.room]
     if let data = try? JSONSerialization.data(withJSONObject: state) {
         try? data.write(to: URL(fileURLWithPath: stateFile), options: .atomic)
@@ -1498,6 +1509,7 @@ func control(_ kind: String, _ meta: [String: Any]) -> Bool {
         members = members.filter { keep.contains($0.key) }
         let saved = rewriteConfig { raw in moveRoom(&raw, room: room, key: key, token: opened?.token) }
         lastID = ""
+        handledIDs = []
         writeState()
         log(saved ? L("\(from) отключил одно из устройств: комната сменила ключ, перезапускаюсь", "\(from) disconnected a device: the room has a new key, restarting") : L("не записал новый ключ комнаты в \(configFile)", "could not save the new room key to \(configFile)"))
         if saved { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { restartAgent() } }
@@ -1591,8 +1603,20 @@ func apply(_ meta: [String: Any], _ data: Data?, fresh: Bool = true) {
     writeState()
 }
 
+/// True when the event with this id was handled already; otherwise remembers it.
+func alreadyHandled(_ id: String, in ids: inout [String], keep: Int) -> Bool {
+    if ids.contains(id) { return true }
+    ids.append(id)
+    if ids.count > keep { ids.removeFirst(ids.count - keep) }
+    return false
+}
+
 func handle(_ event: [String: Any], primary: Bool) {
     guard event["event"] as? String == "message", let id = event["id"] as? String else { return }
+    guard !alreadyHandled(id, in: &handledIDs, keep: handledKeep) else {
+        log(L("пропустил повтор \(id)", "skipped a repeat of \(id)"))
+        return
+    }
     if primary { lastID = id }
     let time = event["time"] as? Double ?? Date().timeIntervalSince1970
     let age = Date().timeIntervalSince1970 - time
