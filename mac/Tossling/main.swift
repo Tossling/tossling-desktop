@@ -203,6 +203,16 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("inline text", sealedInline(inlineMeta, text: String(repeating: "x", count: inlineLimit), key: inlineKey) != nil)
     check("inline text over the message limit after escaping",
           sealedInline(inlineMeta, text: String(repeating: "\"", count: inlineLimit), key: inlineKey) == nil)
+    let origins: [(String, String, Bool)] = [
+        ("https://Tossling.example.com", "https://tossling.example.com:443/file/a", true),
+        ("http://10.0.0.2:8090", "http://10.0.0.2:8090/file/a", true),
+        ("https://tossling.example.com", "http://tossling.example.com/file/a", false),
+        ("https://tossling.example.com", "https://tossling.example.com.evil.net/file/a", false),
+        ("https://tossling.example.com", "https://tossling.example.com:8443/file/a", false),
+    ]
+    for (server, url, same) in origins {
+        check("same origin \(server) \(url)", URL(string: url).map { isSameOrigin(server: server, url: $0) } == same)
+    }
     var seen = [String]()
     check("a new event is handled", !alreadyHandled("a", in: &seen, keep: 2) && !alreadyHandled("b", in: &seen, keep: 2))
     check("a repeated event is skipped", alreadyHandled("a", in: &seen, keep: 2))
@@ -661,6 +671,15 @@ func pairingQR() -> Data? {
 if !qrOut.isEmpty {
     guard let png = pairingQR(), (try? png.write(to: URL(fileURLWithPath: qrOut))) != nil else { exit(1) }
     exit(0)
+}
+
+// An attachment URL comes with the event, outside the envelope, so anyone who can publish to the topic picks it. Only the
+// room's own server gets the token; ntfy serves files without one.
+func isSameOrigin(server: String, url: URL) -> Bool {
+    guard let base = URL(string: server), let scheme = base.scheme?.lowercased(), scheme == url.scheme?.lowercased(),
+          let host = base.host?.lowercased(), host == url.host?.lowercased() else { return false }
+    let port = { (u: URL) in u.port ?? (scheme == "https" ? 443 : 80) }
+    return port(base) == port(url)
 }
 
 func seal(_ data: Data) -> Data? {
@@ -1450,7 +1469,9 @@ func receiveStream(_ meta: [String: Any], _ link: URL, _ id: String, fresh: Bool
     log(L("← \(from): получаю файл \(name) (\(sizeText(size)))", "← \(from): receiving the file \(name) (\(sizeText(size)))"))
     if size >= bigFile { notify(L("Получаю «\(name)» (\(sizeText(size))) от \(from)…", "Receiving «\(name)» (\(sizeText(size))) from \(from)…")) }
     var r = URLRequest(url: link)
-    if !conf.authToken.isEmpty { r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization") }
+    if !conf.authToken.isEmpty, isSameOrigin(server: conf.server, url: link) {
+        r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization")
+    }
     let fail: (String) -> Void = { reason in
         log(L("не получил файл \(name) от \(from): \(reason)", "did not receive the file \(name) from \(from): \(reason)"))
         notify(L("Не получил «\(name)» от \(from): \(reason)", "Did not receive «\(name)» from \(from): \(reason)"))
@@ -1653,7 +1674,9 @@ func handle(_ event: [String: Any], primary: Bool) {
         return
     }
     var r = URLRequest(url: link)
-    if !conf.authToken.isEmpty { r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization") }
+    if !conf.authToken.isEmpty, isSameOrigin(server: conf.server, url: link) {
+        r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization")
+    }
     r.timeoutInterval = 120
     fetch(r) { data, response, _ in
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
