@@ -361,7 +361,16 @@ class Room(
         if (event.event != MESSAGE_EVENT) return
         val conf = settings
         if (event.topic.isNotEmpty() && event.topic != conf.room) return
-        state.update { it.copy(lastId = event.id) }
+        var repeated = false
+        state.update { current ->
+            val handled = afterHandling(handled = current.handled, id = event.id)
+            repeated = handled == null
+            if (handled == null) current else current.copy(lastId = event.id, handled = handled)
+        }
+        if (repeated) {
+            Log.write("skipped a repeat of ${event.id}")
+            return
+        }
         val cipher = ClipCipher.fromBase64(key = conf.key)
         val meta = runCatching { SyncJson.decodeFromString(ClipMeta.serializer(), cipher.openText(text = event.message.orEmpty()).decodeToString()) }.getOrElse {
             Log.write("could not decrypt the message ${event.id}: a different key?")
@@ -773,6 +782,7 @@ class Room(
         private const val FILE_STALE_SECONDS = 3 * 60 * 60
         internal const val INLINE_LIMIT = 2_400
         private const val MESSAGE_LIMIT = 4_096
+        private const val HANDLED_KEEP = 50
         private const val MAX_TEXT = 1_000_000
         private const val MAX_FILE = 500_000_000L
         private const val BIG_FILE = 5_000_000L
@@ -793,6 +803,11 @@ class Room(
         // ntfy keeps a body of up to 4,096 bytes as the message and turns a longer one into an attachment that no
         // receiver can open. Escaping, encryption and Base64 can take 2,400 bytes of text past that, so the sealed
         // envelope decides.
+        // ntfy answers since=<id> with the other messages of that id's second too, so a reconnect can bring back
+        // events this computer has already handled. Returns the latest handled ids with this one, or null for a repeat.
+        internal fun afterHandling(handled: List<String>, id: String, keep: Int = HANDLED_KEEP): List<String>? =
+            if (id in handled) null else (handled + id).takeLast(keep)
+
         internal fun inlineEnvelope(cipher: ClipCipher, meta: ClipMeta): String? =
             cipher.sealToText(plain = SyncJson.encodeToString(ClipMeta.serializer(), meta).toByteArray()).takeIf { it.length <= MESSAGE_LIMIT }
     }
