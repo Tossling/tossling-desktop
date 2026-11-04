@@ -48,6 +48,11 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var shownPercent: Int?
     private var lastDrawn = 0.0
     private var drawPending = false
+    /// While the menu is open its transfer lines follow the model: the item they go after, their separator and rows.
+    private var menuOpen = false
+    private var transferAnchor: NSMenuItem?
+    private var transferSeparator: NSMenuItem?
+    private var transferRows = [(id: String, line: NSMenuItem, cancel: NSMenuItem)]()
 
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -91,6 +96,55 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             item?.button?.image = percent.map { StatusMenu.progressIcon(Double($0) / 100, inner: normalIcon) } ?? normalIcon
         }
         refresh()
+        followTransfers()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === item?.menu else { return }
+        menuOpen = true
+        followTransfers()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === item?.menu else { return }
+        menuOpen = false
+        transferRows = []
+        transferSeparator = nil
+        transferAnchor = nil
+    }
+
+    /// Retitles, drops and adds the transfer lines of the open menu, so the percentage moves while the user watches.
+    private func followTransfers() {
+        guard menuOpen, let menu = item?.menu else { return }
+        let changes = transferMenuChanges(shown: transferRows.map(\.id), now: Transfers.shared.items)
+        for id in changes.drop {
+            guard let at = transferRows.firstIndex(where: { $0.id == id }) else { continue }
+            [transferRows[at].line, transferRows[at].cancel].filter { menu.index(of: $0) >= 0 }.forEach(menu.removeItem)
+            transferRows.remove(at: at)
+        }
+        for transfer in changes.keep {
+            let line = transferLine(transfer)
+            if let row = transferRows.first(where: { $0.id == transfer.id }), row.line.title != line { row.line.title = line }
+        }
+        if !changes.add.isEmpty {
+            if transferSeparator == nil {
+                let separator = NSMenuItem.separator()
+                menu.insertItem(separator, at: transferAnchor.map { menu.index(of: $0) + 1 } ?? 0)
+                transferSeparator = separator
+            }
+            var at = menu.index(of: transferRows.last?.cancel ?? transferSeparator!) + 1
+            for transfer in changes.add {
+                let row = transferRow(transfer)
+                menu.insertItem(row.line, at: at)
+                menu.insertItem(row.cancel, at: at + 1)
+                at += 2
+                transferRows.append((transfer.id, row.line, row.cancel))
+            }
+        }
+        if transferRows.isEmpty, let separator = transferSeparator {
+            if menu.index(of: separator) >= 0 { menu.removeItem(separator) }
+            transferSeparator = nil
+        }
     }
 
     func deviceJoined(_ name: String, isComputer: Bool) {
@@ -108,6 +162,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             menu.addItem(ActionItem(L("Новая комната…", "New Room…"), symbol: "plus.circle") { [weak self] in self?.askNewRoom() })
             menu.addItem(ActionItem(L("Войти в другую комнату…", "Join Another Room…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
         }
+        transferAnchor = menu.items.last
         addTransfers(to: menu)
         menu.addItem(.separator())
         addHistory(to: menu)
@@ -184,16 +239,27 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     private func addTransfers(to menu: NSMenu) {
+        transferRows = []
+        transferSeparator = nil
         let items = Transfers.shared.items
         guard !items.isEmpty else { return }
-        menu.addItem(.separator())
+        let separator = NSMenuItem.separator()
+        menu.addItem(separator)
+        transferSeparator = separator
         for transfer in items {
-            menu.addItem(info(transferLine(transfer), symbol: transfer.incoming ? "arrow.down.circle" : "arrow.up.circle"))
-            let id = transfer.id
-            let cancel = ActionItem(L("Отменить", "Cancel"), symbol: "xmark.circle") { Transfers.shared.cancel(id) }
-            cancel.indentationLevel = 1
-            menu.addItem(cancel)
+            let row = transferRow(transfer)
+            menu.addItem(row.line)
+            menu.addItem(row.cancel)
+            transferRows.append((transfer.id, row.line, row.cancel))
         }
+    }
+
+    private func transferRow(_ transfer: TransferInfo) -> (line: NSMenuItem, cancel: NSMenuItem) {
+        let line = info(transferLine(transfer), symbol: transfer.incoming ? "arrow.down.circle" : "arrow.up.circle")
+        let id = transfer.id
+        let cancel = ActionItem(L("Отменить", "Cancel"), symbol: "xmark.circle") { Transfers.shared.cancel(id) }
+        cancel.indentationLevel = 1
+        return (line, cancel)
     }
 
     private func addHistory(to menu: NSMenu) {
