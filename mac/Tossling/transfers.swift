@@ -90,6 +90,13 @@ func transferLine(_ t: TransferInfo, size: (Int64) -> String = sizeText) -> Stri
                       : L("Отправляю \(t.name): \(percent)%, \(done) из \(total)", "Sending \(t.name): \(percent)%, \(done) of \(total)")
 }
 
+/// How the open menu follows the transfers: the shown lines that stay (with their new state), the ones to drop and
+/// the transfers to add below them, in the model's order.
+func transferMenuChanges(shown: [String], now items: [TransferInfo]) -> (keep: [TransferInfo], drop: [String], add: [TransferInfo]) {
+    let current = Set(items.map(\.id)), seen = Set(shown)
+    return (items.filter { seen.contains($0.id) }, shown.filter { !current.contains($0) }, items.filter { !seen.contains($0.id) })
+}
+
 /// One transfer as seen from the code that runs it. In the agent it updates `Transfers` directly, anywhere else it
 /// posts distributed notifications. Call it on the main thread.
 final class TransferReporter {
@@ -188,7 +195,10 @@ final class Transfers {
             guard let info = TransferInfo(userInfo: note.userInfo), info.pid != getpid() else { return }
             self?.apply(info)
         }
-        sweeper = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.sweep() }
+        let sweeper = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.sweep() }
+        // Also while the menu is open, so a transfer whose process died leaves the open menu.
+        RunLoop.main.add(sweeper, forMode: .common)
+        self.sweeper = sweeper
     }
 
     func apply(_ info: TransferInfo) {
