@@ -79,6 +79,20 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("Building", r.stdout + r.stderr)
         self.assertIn("is off", r.stdout)
 
+    def test_send_without_content_shows_usage(self):
+        self.write(self.config, {"server": "https://ntfy.example.com", "token": "tk_test", "room": "tossy-x", "key": "k", "device_id": "d"})
+        r = self.run_tossling("send", lang="en")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("tossling send [--to <who>]", r.stderr)
+
+    def test_send_to_unknown_device_names_it(self):
+        self.write(self.config, {"server": "https://ntfy.example.com", "token": "tk_test", "room": "tossy-x", "key": "k", "device_id": "d"})
+        r = self.run_tossling("send", "--to", "Pixel", "hello", lang="en")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("No device «Pixel». There are: nobody in the room yet", r.stderr)
+
     def bundle_cli(self, bundle):
         inside = os.path.join(bundle, "Contents", "Resources", "tossling")
         shutil.copytree(os.path.join(ROOT, "cli"), os.path.join(inside, "cli"), ignore=shutil.ignore_patterns("__pycache__"))
