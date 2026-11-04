@@ -463,6 +463,16 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
           && transferLine(receiving, size: megabytes) == "Получаю movie.mov: 25%, 18 из 70 MB")
     uiRussian = wasRussian
     check("transfers: the menu line with the real sizes", transferLine(sending).hasSuffix(sizeText(30_000_000)) && transferLine(sending).contains("40%"))
+    let event = UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!
+    check("download mark: flags, hex time, Tossling and the event id", quarantineValue(now: 1_791_360_000.7, event: event)
+          == "0083;6ac5fc00;Tossling;6F9619FF-8B86-D011-B42D-00C04FC964FF")
+    let received = scratch.appendingPathComponent("received.command")
+    try? Data("echo hi\n".utf8).write(to: received)
+    var mark = [UInt8](repeating: 0, count: 128)
+    let markLength = markDownloaded(received, now: 1_791_360_000) ? getxattr(received.path, "com.apple.quarantine", &mark, mark.count, 0, 0) : -1
+    check("download mark: a received file carries com.apple.quarantine",
+          markLength > 0 && String(decoding: mark.prefix(markLength), as: UTF8.self).hasPrefix("0083;6ac5fc00;Tossling;"))
+    check("download mark: a missing file is left alone", !markDownloaded(scratch.appendingPathComponent("missing")))
     try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
@@ -1716,7 +1726,22 @@ func downloadURL(_ name: String) -> URL {
 
 func saveDownload(_ name: String, _ data: Data) -> URL? {
     let url = downloadURL(name)
-    return (try? data.write(to: url)) != nil ? url : nil
+    guard (try? data.write(to: url)) != nil else { return nil }
+    markDownloaded(url)
+    return url
+}
+
+/// The com.apple.quarantine value a browser puts on a download: flags 0083, the time in hex, the app and an event id.
+func quarantineValue(now: Double = Date().timeIntervalSince1970, event: UUID = UUID()) -> String {
+    "0083;\(String(UInt64(max(0, now)), radix: 16));Tossling;\(event.uuidString)"
+}
+
+/// Marks a received file as downloaded, so Gatekeeper checks an app or a script from another device before it runs.
+/// A file that cannot be marked stays as it is.
+@discardableResult
+func markDownloaded(_ url: URL, now: Double = Date().timeIntervalSince1970) -> Bool {
+    let value = Data(quarantineValue(now: now).utf8)
+    return value.withUnsafeBytes { setxattr(url.path, "com.apple.quarantine", $0.baseAddress, value.count, 0, 0) } == 0
 }
 
 func deliverFile(_ meta: [String: Any], _ url: URL, size: Int64, hash: String, fresh: Bool) {
@@ -1774,6 +1799,7 @@ func receiveStream(_ meta: [String: Any], _ link: URL, _ id: String, fresh: Bool
             do {
                 let result = try openFile(file, dst)
                 try? FileManager.default.removeItem(at: file)
+                markDownloaded(dst)
                 DispatchQueue.main.async {
                     guard !reporter.isCancelled else {
                         try? FileManager.default.removeItem(at: dst)
