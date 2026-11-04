@@ -123,7 +123,7 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
      * [content] with extra native formats. Each mark gets a flavor of its own mapped to exactly that native name, and AWT
      * writes an InputStream flavor's bytes to the native format as they are, in the same clipboard write as the content.
      */
-    private class MarkedSelection(private val content: Transferable, marks: List<Pair<String, ByteArray>>) : Transferable {
+    internal class MarkedSelection(private val content: Transferable, marks: List<Pair<String, ByteArray>>) : Transferable {
         private val marks = marks.map { (native, data) -> markFlavor(native) to data }
         override fun getTransferDataFlavors(): Array<DataFlavor> = content.transferDataFlavors + marks.map { it.first }
         override fun isDataFlavorSupported(flavor: DataFlavor): Boolean = marks.any { it.first == flavor } || content.isDataFlavorSupported(flavor)
@@ -133,12 +133,30 @@ open class AwtClipboard : SystemClipboard, ClipboardOwner {
     companion object {
         private val markFlavors = mutableMapOf<String, DataFlavor>()
 
+        /** The flavor for the native format [native], mapped both ways: AWT writes it as it is and offers it when another app has. */
         @Synchronized
-        private fun markFlavor(native: String): DataFlavor = markFlavors.getOrPut(native) {
+        internal fun markFlavor(native: String): DataFlavor = markFlavors.getOrPut(native) {
             val flavor = DataFlavor("application/x-tossling-mark-${native.lowercase().filter { it.isLetterOrDigit() }}; class=java.io.InputStream")
-            (SystemFlavorMap.getDefaultFlavorMap() as? SystemFlavorMap)?.setNativesForFlavor(flavor, arrayOf(native))
+            (SystemFlavorMap.getDefaultFlavorMap() as? SystemFlavorMap)?.apply {
+                setNativesForFlavor(flavor, arrayOf(native))
+                setFlavorsForNative(native, arrayOf(flavor))
+            }
             flavor
         }
+
+        /** Whether [contents] carry the native format [native] with the value [value], as a password manager marks its copy. */
+        internal fun hasMark(contents: Transferable, native: String, value: String): Boolean {
+            val flavor = markFlavor(native)
+            if (!contents.isDataFlavorSupported(flavor)) return false
+            val data = when (val raw = contents.getTransferData(flavor)) {
+                is java.io.InputStream -> raw.use { it.readNBytes(MARK_READ_LIMIT) }
+                is ByteArray -> raw
+                else -> return false
+            }
+            return data.decodeToString().trim { it.isWhitespace() || it == '\u0000' } == value
+        }
+
+        private const val MARK_READ_LIMIT = 256
 
         fun pngOf(image: Image): ByteArray? {
             val width = image.getWidth(null)
@@ -156,7 +174,14 @@ class PollingClipboard : AwtClipboard() {
 
     // KDE's Klipper and other clipboard managers on Linux leave out content with this hint.
     override val secretMarks: List<Pair<String, ByteArray>> =
-        if (Platform.os == Os.LINUX) listOf("x-kde-passwordManagerHint" to "secret".toByteArray()) else emptyList()
+        if (Platform.os == Os.LINUX) listOf(PASSWORD_HINT to SECRET.toByteArray()) else emptyList()
+
+    // KeePassXC and other password managers put the same hint on what they copy: the automatic sending leaves it out,
+    // and Send the Clipboard Now sends it marked secret, as on Windows.
+    override fun isPrivate(): Boolean {
+        if (Platform.os != Os.LINUX) return false
+        return retry { clipboard.getContents(null)?.let { hasMark(contents = it, native = PASSWORD_HINT, value = SECRET) } ?: false } ?: false
+    }
 
     override fun watch(onChange: () -> Unit) {
         thread(isDaemon = true, name = "clipboard-poll") {
@@ -192,7 +217,9 @@ class PollingClipboard : AwtClipboard() {
         return hash
     }
 
-    private companion object {
+    companion object {
+        const val PASSWORD_HINT = "x-kde-passwordManagerHint"
+        const val SECRET = "secret"
         private const val POLL_MS = 600L
     }
 }
