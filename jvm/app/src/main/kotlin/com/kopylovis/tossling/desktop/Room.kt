@@ -58,6 +58,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.serializer
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -575,6 +576,7 @@ class Room(
         } finally {
             transfer.end()
         }
+        markDownloaded(file = target)
         if (fresh) copyAgain(Clip.Files(listOf(target)))
         history.addFile(file = target, size = received, incoming = true, device = from)
         val where = L("в Загрузках/Tossling", "in Downloads/Tossling")
@@ -974,6 +976,20 @@ fun sizeText(size: Long): String = when {
 
 fun safeName(name: String): String =
     name.substringAfterLast('/').substringAfterLast('\\').replace(Regex("[\\u0000-\\u001f:*?\"<>|]"), "_").trim().take(120).ifBlank { "file" }
+
+/** The Mark of the Web that browsers give downloads: zone 3 is the internet, so Windows asks before running the file. */
+const val ZONE_IDENTIFIER = "[ZoneTransfer]\r\nZoneId=3\r\n"
+
+fun zoneStream(file: File): String = "${file.path}:Zone.Identifier"
+
+/**
+ * Marks a received [file] as downloaded on Windows by writing its `Zone.Identifier` alternate data stream. Off NTFS
+ * there are no such streams and the write fails, which is fine: the file stays as it is. Returns whether it was marked.
+ */
+fun markDownloaded(file: File, os: Os = Platform.os): Boolean {
+    if (os != Os.WINDOWS) return false
+    return runCatching { FileOutputStream(zoneStream(file)).use { it.write(ZONE_IDENTIFIER.toByteArray()) } }.isSuccess
+}
 
 fun uniqueFile(dir: File, name: String): File {
     var file = File(dir, name)
