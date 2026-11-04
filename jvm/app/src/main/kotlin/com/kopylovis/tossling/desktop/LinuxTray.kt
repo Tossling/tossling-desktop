@@ -28,6 +28,10 @@ interface StatusNotifierItem : DBusInterface {
     fun SecondaryActivate(x: Int, y: Int)
     fun ContextMenu(x: Int, y: Int)
     fun Scroll(delta: Int, orientation: String)
+
+    class NewIcon(path: String) : DBusSignal(path)
+
+    class NewToolTip(path: String) : DBusSignal(path)
 }
 
 @DBusInterfaceName("org.kde.StatusNotifierWatcher")
@@ -84,6 +88,10 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
     private val ticker = Executors.newSingleThreadScheduledExecutor { Thread(it, "tray-refresh").apply { isDaemon = true } }
     private val menu = MenuTree()
 
+    @Volatile private var percent: Int? = null
+
+    @Volatile private var tip = ""
+
     override fun install(): Boolean = try {
         val bus = DBusConnectionBuilder.forSessionBus().build()
         connection = bus
@@ -119,6 +127,18 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
             bus.getRemoteObject(NOTIFICATIONS, "/org/freedesktop/Notifications", Notifications::class.java)
                 .Notify("Tossling", UInt32(0), notificationIcon, "Tossling", text, emptyList(), emptyMap(), -1)
         }.onFailure { Log.write("could not show a notification: ${it.message}") }
+    }
+
+    override fun showTransfers(percent: Int?, tip: String?) {
+        val iconChanged = percent != this.percent
+        val tipChanged = tip.orEmpty() != this.tip
+        this.percent = percent
+        this.tip = tip.orEmpty()
+        val bus = connection ?: return
+        runCatching {
+            if (iconChanged) bus.sendMessage(StatusNotifierItem.NewIcon(ITEM_PATH))
+            if (tipChanged) bus.sendMessage(StatusNotifierItem.NewToolTip(ITEM_PATH))
+        }.onFailure { Log.write("could not update the tray icon: ${it.message}") }
     }
 
     private fun register() {
@@ -168,14 +188,14 @@ class LinuxTray(private val build: () -> List<MenuEntry>, private val onOpen: ()
                 "IconPixmap" to Variant(pixmaps, "a(iiay)"),
                 "OverlayIconName" to Variant(""),
                 "AttentionIconName" to Variant(""),
-                "ToolTip" to Variant(ToolTip(icon = "", pixmaps = emptyList(), title = "Tossling", text = ""), "(sa(iiay)ss)"),
+                "ToolTip" to Variant(ToolTip(icon = "", pixmaps = emptyList(), title = "Tossling", text = tip), "(sa(iiay)ss)"),
                 "ItemIsMenu" to Variant(true),
                 "Menu" to Variant(org.freedesktop.dbus.DBusPath(MENU_PATH)),
             )
         }
 
         private fun pixmap(size: Int): Pixmap {
-            val image = TrayGlyph.draw(size = size)
+            val image = percent?.let { TrayGlyph.drawProgress(size = size, fraction = it / 100.0) } ?: TrayGlyph.draw(size = size)
             val bytes = ByteArray(size * size * 4)
             var i = 0
             for (y in 0 until size) for (x in 0 until size) {

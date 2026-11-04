@@ -103,6 +103,7 @@ fun main(args: Array<String>) {
     SwingUtilities.invokeAndWait {
         if (!tray.install() && tray is LinuxTray) tray = AppTray(build = menu::build, onOpen = menu::opened).apply { install() }
     }
+    tasks.showTransfers(transfers = room.transfers) { tray }
     ExplorerMenu.apply()
     Inbox.watch(
         onFiles = { files -> if (store.settings.value.isConfigured) room.sendFiles(files) else tray.notify(L("Сначала войди в комнату", "Join a room first")) },
@@ -219,6 +220,14 @@ private class TrayMenu(
                 item(text = L("Установить версию ${release.version}", "Install Version ${release.version}"), enabled = !updates.busy.value) { updates.install(release) }
             } else {
                 item(text = L("Скачать версию ${release.version}", "Download Version ${release.version}")) { openLink(release.notes) }
+            }
+        }
+        val transfers = room.transfers.items.value
+        if (transfers.isNotEmpty()) {
+            separator()
+            transfers.forEach { transfer ->
+                item(text = transferLine(transfer), enabled = false)
+                item(text = L("Отменить", "Cancel")) { room.transfers.cancel(transfer.id) }
             }
         }
         separator()
