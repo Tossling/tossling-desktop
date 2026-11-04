@@ -180,10 +180,11 @@ func memberKey(_ info: [String: Any]) -> String? {
 
 /// Before a removal: the remaining devices (every member but this Mac and the removed one) that have no public key to
 /// seal the new room key for, and those whose key changed since the user last accepted it. Devices without an id
-/// (legacy-…) cannot get a sealed key either.
+/// (legacy-…) are left out, as the rekey always left them out: they cannot be addressed, so counting them would block
+/// every removal for good. The Android and iOS apps do the same.
 func removalCheck(_ members: [String: [String: Any]], removing id: String, me: String) -> (noKey: [String], changed: [String]) {
-    let remaining = members.filter { $0.key != id && $0.key != me }
-    let noKey = remaining.filter { $0.key.hasPrefix("legacy-") || memberKey($0.value) == nil }.map(\.key).sorted()
+    let remaining = members.filter { $0.key != id && $0.key != me && !$0.key.hasPrefix("legacy-") }
+    let noKey = remaining.filter { memberKey($0.value) == nil }.map(\.key).sorted()
     let changed = remaining.filter { $0.value["key_changed"] != nil }.map(\.key).sorted()
     return (noKey, changed)
 }
