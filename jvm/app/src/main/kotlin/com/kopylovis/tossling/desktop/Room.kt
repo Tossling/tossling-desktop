@@ -1,5 +1,7 @@
 package com.kopylovis.tossling.desktop
 
+import com.kopylovis.tossling.protocol.AttachmentLimits
+import com.kopylovis.tossling.protocol.AttachmentTooLarge
 import com.kopylovis.tossling.protocol.ClipMeta
 import com.kopylovis.tossling.protocol.Endpoint
 import com.kopylovis.tossling.protocol.Freshness
@@ -35,6 +37,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -48,6 +51,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -84,7 +89,12 @@ class Room(
     private val contentSeq = AtomicInteger()
     private val _connected = MutableStateFlow(false)
     private val _removed = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    private var session: Job? = null
+    @Volatile private var session: Job? = null
+
+    @Volatile private var receiver: Job? = null
+
+    // Files download beside the event loop, a few at a time, so texts keep coming while a big file is on its way.
+    private val fileSlots = Semaphore(permits = FILE_DOWNLOADS)
 
     @Volatile private var lastReceived: Pair<Set<String>, Long>? = null
 
@@ -118,16 +128,11 @@ class Room(
                 runCatching { capture() }.onFailure { Log.write("could not read the clipboard: ${it.message}") }
             }
         }
-        scope.launch {
-            for (event in events) {
-                try {
-                    handle(event)
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    Log.write("message ${event.id} failed: $error")
-                }
-            }
+        val loop = scope.launch { receiveEach(events = events, handle = ::handle) }
+        receiver = loop
+        loop.invokeOnCompletion { cause ->
+            Log.write("stopped handling messages: ${cause ?: "the loop ended"}")
+            _connected.value = false
         }
         scope.launch {
             delay(MAINTENANCE_DELAY_MS)
@@ -160,7 +165,14 @@ class Room(
         if (!settings.isConfigured) return
         ensureIdentity()
         if (state.value.value.room != settings.room) state.update { RoomState(room = settings.room) }
-        session = scope.launch { listen() }
+        val job = scope.launch { listen() }
+        session = job
+        // Whatever ends the listener, the tray must not keep saying connected.
+        job.invokeOnCompletion { cause ->
+            if (session !== job) return@invokeOnCompletion
+            if (cause != null && cause !is CancellationException) Log.write("the listener stopped: $cause")
+            _connected.value = false
+        }
         if (needsOwnToken(settings)) scope.launch { ensureOwnToken() }
     }
 
@@ -364,7 +376,8 @@ class Room(
                     since = since,
                     onOpen = {
                         if (!_connected.value) Log.write("connected to ${conf.server}")
-                        _connected.value = true
+                        // Connected only while messages are also handled: a dead event loop would receive nothing.
+                        _connected.value = receiver?.isActive != false
                         retry = FIRST_RETRY_MS
                     },
                     onEvent = { events.trySend(it) },
@@ -374,9 +387,10 @@ class Room(
             } catch (error: NtfyException) {
                 if (!error.isHeld) Log.write("the server answered HTTP ${error.code}")
                 if (!error.isHeld && serverRefusal(code = error.code) == ServerRefusal.TOKEN) tellRefused(token = conf.endpoint.token)
-            } catch (error: Exception) {
+            } catch (error: Throwable) {
+                // An OutOfMemoryError while reading the stream ends this connection, not the listener.
                 currentCoroutineContext().ensureActive()
-                if (_connected.value) Log.write("the connection broke: ${error.message}")
+                if (_connected.value || error !is Exception) Log.write("the connection broke: ${error.message ?: error}")
             }
             _connected.value = false
             delay(maxOf(retry, client.gate.pauseLeft(endpoint = conf.endpoint)))
@@ -469,7 +483,11 @@ class Room(
                 apply(clip = Clip.Image(bytes = bytes, mime = meta.mime), from = from, secret = meta.sensitive == true)
             }
 
-            ClipMeta.FILE -> receiveFile(meta = meta, url = url ?: return, cipher = cipher, fresh = fresh, from = from)
+            ClipMeta.FILE -> {
+                val link = url ?: return
+                scope.launch { fileSlots.withPermit { receiveFile(meta = meta, url = link, cipher = cipher, fresh = fresh, from = from) } }
+            }
+
             ClipMeta.MOVE -> Unit
             else -> Log.write("an unknown message: $kind")
         }
@@ -506,7 +524,10 @@ class Room(
     }
 
     private suspend fun download(endpoint: Endpoint, url: String, cipher: ClipCipher, meta: ClipMeta, from: String): ByteArray? = try {
-        cipher.open(sealed = client.download(endpoint = endpoint, url = url))
+        cipher.open(sealed = client.download(endpoint = endpoint, url = url, maxBytes = AttachmentLimits.of(meta.kind)))
+    } catch (error: AttachmentTooLarge) {
+        Log.write("skipped ${meta.kind} from $from: the attachment is larger than ${sizeText(error.limit)}")
+        null
     } catch (error: NtfyException) {
         if (error.code != 404 && error.code != 410) throw error
         Log.write("the attachment of ${meta.kind} from $from is gone")
@@ -520,19 +541,28 @@ class Room(
         Log.write("← $from: receiving the file $name (${sizeText(size)})")
         if (size >= BIG_FILE) notifier.notify(L("Получаю «$name» (${sizeText(size)}) от $from…", "Receiving «$name» (${sizeText(size)}) from $from…"))
         val received = try {
-            client.downloadTo(endpoint = settings.endpoint, url = url) { input ->
-                target.outputStream().buffered().use { output ->
-                    if (meta.format == ClipCipher.STREAM_FORMAT) cipher.openStream(input = input, output = output) {} else output.write(cipher.open(sealed = input.readBytes()))
+            if (meta.format == ClipCipher.STREAM_FORMAT) {
+                client.downloadTo(endpoint = settings.endpoint, url = url) { input ->
+                    target.outputStream().buffered().use { output -> cipher.openStream(input = input, output = output) {} }
                 }
+            } else {
+                // An old-style file is sealed as one piece and opened in memory, so it has a limit.
+                val sealed = client.download(endpoint = settings.endpoint, url = url, maxBytes = AttachmentLimits.of(ClipMeta.FILE))
+                target.writeBytes(cipher.open(sealed = sealed))
             }
             target.length()
         } catch (error: CancellationException) {
             target.delete()
             throw error
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             target.delete()
             val gone = error is NtfyException && (error.code == 404 || error.code == 410)
-            val reason = if (gone) L("сервер его уже удалил, отправьте ещё раз", "the server has already deleted it, send it again") else error.message.orEmpty()
+            val reason = when {
+                gone -> L("сервер его уже удалил, отправьте ещё раз", "the server has already deleted it, send it again")
+                error is AttachmentTooLarge -> L("он больше ${sizeText(error.limit)}", "it is larger than ${sizeText(error.limit)}")
+                error is OutOfMemoryError -> L("не хватило памяти", "not enough memory")
+                else -> error.message ?: error.toString()
+            }
             Log.write("did not receive the file $name from $from: $reason")
             notifier.notify(L("Не получил «$name» от $from: $reason", "Did not receive «$name» from $from: $reason"))
             return
@@ -844,6 +874,7 @@ class Room(
         private const val MAX_TEXT = 1_000_000
         private const val MAX_FILE = 500_000_000L
         private const val BIG_FILE = 5_000_000L
+        private const val FILE_DOWNLOADS = 2
         private const val ECHO_MS = 60_000L
         private const val SETTLE_MS = 150L
         private const val FIRST_RETRY_MS = 1_000L
@@ -865,6 +896,23 @@ class Room(
         // events this computer has already handled. Returns the latest handled ids with this one, or null for a repeat.
         internal fun afterHandling(handled: List<String>, id: String, keep: Int = HANDLED_KEEP): List<String>? =
             if (id in handled) null else (handled + id).takeLast(keep)
+
+        /**
+         * Hands every event to [handle], one at a time, and keeps going whatever one of them throws, an
+         * [OutOfMemoryError] included: a dead loop would leave the app looking connected while nothing arrives. The id
+         * of an event is recorded as handled before its work starts, so a failed event is never tried again.
+         */
+        internal suspend fun receiveEach(events: ReceiveChannel<NtfyEvent>, handle: suspend (NtfyEvent) -> Unit) {
+            for (event in events) {
+                try {
+                    handle(event)
+                } catch (error: Throwable) {
+                    // A CancellationException from inside the work (a timeout) ends that event, not the loop.
+                    currentCoroutineContext().ensureActive()
+                    Log.write("message ${event.id} failed: $error")
+                }
+            }
+        }
 
         /**
          * The `mid`s handled in the last 3 hours with [mid], or null when [mid] is among them: the server, or anyone
