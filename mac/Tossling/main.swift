@@ -298,7 +298,7 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     let roomMembers: [String: [String: Any]] = ["me": ["pk": pkA], "gone": [:], "ok": ["pk": pkA], "old": ["pk": ""], "legacy-android-Pixel": ["pk": pkB],
                                          "moved": ["pk": pkC, "first_pk": pkA, "key_changed": 1.0]]
     let removalBlocked = removalCheck(roomMembers, removing: "gone", me: "me")
-    check("removal names remaining devices without a key", removalBlocked.noKey == ["legacy-android-Pixel", "old"])
+    check("removal names remaining devices without a key, not old ones without an id", removalBlocked.noKey == ["old"])
     check("removal names remaining devices whose key changed", removalBlocked.changed == ["moved"])
     let removalClear = removalCheck(roomMembers.filter { ["me", "gone", "ok"].contains($0.key) }, removing: "gone", me: "me")
     check("removal goes on when every remaining device has a key", removalClear.noKey.isEmpty && removalClear.changed.isEmpty)
