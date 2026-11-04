@@ -416,6 +416,53 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
           && fresh["name"] as? String == "Studio" && fresh["aliases"] as? [String: String] == ["d2": "Phone"] && fresh["auto"] as? Bool == false
           && fresh["hotkey_keys"] as? String == "shift-cmd-c" && fresh["retire"] == nil)
     check("new room: asks for the add device window", fresh["add_device"] as? Bool == true)
+    let sending = TransferInfo(id: "a1", name: "report.pdf", incoming: false, done: 12_000_000, total: 30_000_000, state: .active, pid: 4242)
+    let receiving = TransferInfo(id: "b2", name: "movie.mov", incoming: true, done: 18_000_000, total: 70_000_000, state: .active, pid: 4243)
+    check("transfers: the fraction is the sum of done over the sum of total", transferFraction([sending, receiving]) == 0.3
+          && transferFraction([sending]) == 0.4)
+    check("transfers: no fraction without a size", transferFraction([]) == nil
+          && transferFraction([TransferInfo(id: "c", name: "x", incoming: true, done: 5, total: 0, state: .active, pid: 1)]) == nil)
+    check("transfers: done over total counts as total", transferFraction([TransferInfo(id: "c", name: "x", incoming: true, done: 50, total: 10, state: .active, pid: 1)]) == 1)
+    check("transfers: the first update and the final state always go out", shouldPostTransfer(lastAt: nil, now: 100, final: false)
+          && shouldPostTransfer(lastAt: 100, now: 100.01, final: true))
+    check("transfers: updates go out about 4 times a second", !shouldPostTransfer(lastAt: 100, now: 100.2, final: false)
+          && shouldPostTransfer(lastAt: 100, now: 100.25, final: false) && shouldPostTransfer(lastAt: 100, now: 101, final: false))
+    var heard = [sending, receiving, TransferInfo(id: "d4", name: "gone.zip", incoming: false, done: 0, total: 1, state: .active, pid: 4244)]
+    heard[0].updated = 1_000
+    heard[1].updated = 969
+    heard[2].updated = 1_000
+    check("transfers: silent for 30 s or from a process that is gone are dropped",
+          staleTransfers(heard, now: 1_000, alive: { $0 != 4244 }) == ["b2", "d4"] && staleTransfers(heard, now: 999, alive: { _ in true }).isEmpty)
+    check("transfers: this process counts as alive", processAlive(getpid()))
+    let wire = PropertyListSerialization.propertyList(sending.userInfo, isValidFor: .binary)
+        ? (try? PropertyListSerialization.data(fromPropertyList: sending.userInfo, format: .binary, options: 0))
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) } as? [String: Any]
+        : nil
+    check("transfers: userInfo is a property list and comes back the same", wire != nil && TransferInfo(userInfo: wire) == sending
+          && TransferInfo(userInfo: receiving.userInfo) == receiving)
+    var broken = sending.userInfo
+    broken["state"] = "paused"
+    var negative = sending.userInfo
+    negative["done"] = -1
+    check("transfers: a malformed userInfo is ignored", TransferInfo(userInfo: broken) == nil && TransferInfo(userInfo: negative) == nil
+          && TransferInfo(userInfo: nil) == nil && TransferInfo(userInfo: ["id": "a1"]) == nil)
+    let wasRussian = uiRussian
+    let megabytes: (Int64) -> String = { $0 >= 1_000_000 ? "\($0 / 1_000_000) MB" : "\($0 / 1_000) KB" }
+    uiRussian = false
+    check("transfers: the menu line in English", transferLine(sending, size: megabytes) == "Sending report.pdf: 40%, 12 of 30 MB"
+          && transferLine(receiving, size: megabytes) == "Receiving movie.mov: 25%, 18 of 70 MB")
+    var started = sending
+    started.done = 500_000
+    check("transfers: the menu line keeps a different unit", transferLine(started, size: megabytes) == "Sending report.pdf: 1%, 500 KB of 30 MB")
+    started.done = 0
+    check("transfers: the menu line at the start", transferLine(started, size: megabytes) == "Sending report.pdf: 0%, 0 of 30 MB")
+    started.total = 0
+    check("transfers: the menu line without a size", transferLine(started, size: megabytes) == "Sending report.pdf")
+    uiRussian = true
+    check("transfers: the menu line in Russian", transferLine(sending, size: megabytes) == "Отправляю report.pdf: 40%, 12 из 30 MB"
+          && transferLine(receiving, size: megabytes) == "Получаю movie.mov: 25%, 18 из 70 MB")
+    uiRussian = wasRussian
+    check("transfers: the menu line with the real sizes", transferLine(sending).hasSuffix(sizeText(30_000_000)) && transferLine(sending).contains("40%"))
     try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
@@ -1136,6 +1183,7 @@ final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegat
     var body = Data()
     var downloaded: URL?
     var sent: (request: URLRequest, at: Double)?
+    private var task: URLSessionTask?
 
     init(onProgress: @escaping (Int64, Int64) -> Void, onDone: @escaping (Int, Data, URL?, Error?) -> Void) {
         self.onProgress = onProgress
@@ -1149,12 +1197,19 @@ final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegat
 
     func upload(_ request: URLRequest, file: URL) {
         guard admit(request) else { return }
-        session.uploadTask(with: request, fromFile: file).resume()
+        task = session.uploadTask(with: request, fromFile: file)
+        task?.resume()
     }
 
     func download(_ request: URLRequest) {
         guard admit(request) else { return }
-        session.downloadTask(with: request).resume()
+        task = session.downloadTask(with: request)
+        task?.resume()
+    }
+
+    /// Stops the transfer; `onDone` still comes, with code 0 and a cancellation error.
+    func cancel() {
+        task?.cancel()
     }
 
     private func admit(_ request: URLRequest) -> Bool {
@@ -1193,6 +1248,7 @@ final class NetTask: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegat
         if let sent = sent { Gate.shared.note(sent.request, code: code, sentAt: sent.at) }
         onDone(code, body, downloaded, error)
         session.finishTasksAndInvalidate()
+        self.task = nil
     }
 }
 
@@ -1240,13 +1296,24 @@ func publishFile(_ src: URL, extra: [String: Any], announce: Bool, done: ((Bool)
     let tmp = scratchFile("send")
     let size = (try? src.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
     let meter = Meter(name: name, total: size)
+    let reporter = TransferReporter(name: name, incoming: false, total: size)
+    var upload: NetTask?
+    reporter.onCancel = { upload?.cancel() }
     let where_ = extra["to"] == nil ? L("в комнату", "to the room") : L("выбранным устройствам", "to the chosen devices")
     if announce { notify(L("Отправляю «\(name)» (\(sizeText(size))) \(where_)…", "Sending «\(name)» (\(sizeText(size))) \(where_)…")) }
     let fail: (String) -> Void = { reason in
         meter.finish()
         try? FileManager.default.removeItem(at: tmp)
-        log(L("не отправил файл \(name) (\(sizeText(size))): \(reason)", "did not send the file \(name) (\(sizeText(size))): \(reason)"))
-        if announce { notify(L("Не отправил «\(name)»: \(reason)", "Did not send «\(name)»: \(reason)")) }
+        upload = nil
+        if reporter.isCancelled {
+            reporter.cancelled()
+            log(L("отменил отправку файла \(name) (\(sizeText(size)))", "cancelled sending the file \(name) (\(sizeText(size)))"))
+            if announce { notify(L("Отправка «\(name)» отменена", "Sending «\(name)» was cancelled")) }
+        } else {
+            reporter.failed()
+            log(L("не отправил файл \(name) (\(sizeText(size))): \(reason)", "did not send the file \(name) (\(sizeText(size))): \(reason)"))
+            if announce { notify(L("Не отправил «\(name)»: \(reason)", "Did not send «\(name)»: \(reason)")) }
+        }
         writeState()
         done?(false)
     }
@@ -1259,6 +1326,10 @@ func publishFile(_ src: URL, extra: [String: Any], announce: Bool, done: ((Bool)
             return
         }
         DispatchQueue.main.async {
+            guard !reporter.isCancelled else {
+                fail("")
+                return
+            }
             var meta: [String: Any] = ["k": "file", "m": type?.preferredMIMEType ?? "application/octet-stream", "src": "mac",
                                        "n": conf.deviceName, "f": name, "x": 2, "s": sealed.size]
             if !conf.deviceID.isEmpty { meta["id"] = conf.deviceID }
@@ -1272,7 +1343,10 @@ func publishFile(_ src: URL, extra: [String: Any], announce: Bool, done: ((Bool)
             r.setValue("4", forHTTPHeaderField: "X-Priority")
             r.setValue(sealedMeta.base64EncodedString(), forHTTPHeaderField: "X-Message")
             r.setValue("clip.bin", forHTTPHeaderField: "X-Filename")
-            let task = NetTask(onProgress: { sent, _ in meter.update(min(sent, sealed.size)) }) { code, reply, _, error in
+            let task = NetTask(onProgress: { sent, _ in
+                meter.update(min(sent, sealed.size))
+                reporter.progress(min(sent, sealed.size))
+            }) { code, reply, _, error in
                 guard code == 200 else {
                     let detail = error?.localizedDescription
                         ?? String(data: reply, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1281,6 +1355,8 @@ func publishFile(_ src: URL, extra: [String: Any], announce: Bool, done: ((Bool)
                 }
                 meter.update(sealed.size)
                 meter.finish()
+                reporter.finish()
+                upload = nil
                 try? FileManager.default.removeItem(at: tmp)
                 sentCount += 1
                 lastSent = Date().timeIntervalSince1970
@@ -1290,6 +1366,7 @@ func publishFile(_ src: URL, extra: [String: Any], announce: Bool, done: ((Bool)
                 writeState()
                 done?(true)
             }
+            upload = task
             task.upload(r, file: tmp)
         }
     }
@@ -1672,13 +1749,23 @@ func receiveStream(_ meta: [String: Any], _ link: URL, _ id: String, fresh: Bool
     if !conf.authToken.isEmpty, isSameOrigin(server: conf.server, url: link) {
         r.setValue("Bearer \(conf.authToken)", forHTTPHeaderField: "Authorization")
     }
+    // The download is the sealed file, a little larger than the size in the meta.
+    let reporter = TransferReporter(name: name, incoming: true, total: size > 0 ? sealedSize(size) : 0)
     let fail: (String) -> Void = { reason in
-        log(L("не получил файл \(name) от \(from): \(reason)", "did not receive the file \(name) from \(from): \(reason)"))
-        notify(L("Не получил «\(name)» от \(from): \(reason)", "Did not receive «\(name)» from \(from): \(reason)"))
+        if reporter.isCancelled {
+            reporter.cancelled()
+            log(L("отменил получение файла \(name) от \(from)", "cancelled receiving the file \(name) from \(from)"))
+            notify(L("Получение «\(name)» от \(from) отменено", "Receiving «\(name)» from \(from) was cancelled"))
+        } else {
+            reporter.failed()
+            log(L("не получил файл \(name) от \(from): \(reason)", "did not receive the file \(name) from \(from): \(reason)"))
+            notify(L("Не получил «\(name)» от \(from): \(reason)", "Did not receive «\(name)» from \(from): \(reason)"))
+        }
         writeState()
     }
-    NetTask(onProgress: { _, _ in }) { code, _, file, error in
-        guard code == 200, let file = file else {
+    let task = NetTask(onProgress: { written, expected in reporter.progress(written, total: expected > 0 ? expected : nil) }) { code, _, file, error in
+        guard code == 200, let file = file, !reporter.isCancelled else {
+            if let file = file { try? FileManager.default.removeItem(at: file) }
             fail(code == 404 || code == 410 ? gone : error?.localizedDescription ?? "HTTP \(code)")
             return
         }
@@ -1687,14 +1774,24 @@ func receiveStream(_ meta: [String: Any], _ link: URL, _ id: String, fresh: Bool
             do {
                 let result = try openFile(file, dst)
                 try? FileManager.default.removeItem(at: file)
-                DispatchQueue.main.async { deliverFile(meta, dst, size: result.size, hash: result.hash, fresh: fresh) }
+                DispatchQueue.main.async {
+                    guard !reporter.isCancelled else {
+                        try? FileManager.default.removeItem(at: dst)
+                        fail("")
+                        return
+                    }
+                    reporter.finish()
+                    deliverFile(meta, dst, size: result.size, hash: result.hash, fresh: fresh)
+                }
             } catch {
                 try? FileManager.default.removeItem(at: file)
                 try? FileManager.default.removeItem(at: dst)
                 DispatchQueue.main.async { fail((error as? StreamError)?.text ?? L("не расшифровал: другой ключ?", "could not decrypt: a different key?")) }
             }
         }
-    }.download(r)
+    }
+    reporter.onCancel = { task.cancel() }
+    task.download(r)
 }
 
 func shownName(_ meta: [String: Any], _ fallback: String) -> String {
@@ -2281,6 +2378,7 @@ Notifier.shared.start()
 _ = History.shared
 Alerts.shared.start()
 StatusMenu.shared.install()
+Transfers.shared.start()
 if readConfigFile(configFile)?["add_device"] as? Bool == true && rewriteConfig({ $0["add_device"] = nil }) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { StatusMenu.shared.showAddDevice() }
 }

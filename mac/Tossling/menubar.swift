@@ -44,10 +44,14 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var panelModel: PanelModel?
     private var inviteProcess: Process?
     private var waitsForPhone = false
+    private let normalIcon = StatusMenu.icon()
+    private var shownPercent: Int?
+    private var lastDrawn = 0.0
+    private var drawPending = false
 
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = StatusMenu.icon()
+        item.button?.image = normalIcon
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
@@ -59,7 +63,34 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     func refresh() {
         guard let button = item?.button else { return }
         button.appearsDisabled = !connected || isPaused || refusal != nil
-        button.toolTip = "Tossling — \(statusLine())"
+        var tip = "Tossling — \(statusLine())"
+        if let percent = shownPercent {
+            let count = Transfers.shared.items.count
+            tip += count == 1 ? L(" · передача \(percent)%", " · transfer \(percent)%") : L(" · передачи (\(count)) \(percent)%", " · \(count) transfers \(percent)%")
+        }
+        button.toolTip = tip
+    }
+
+    /// Redraws the icon for the transfers at most every quarter of a second.
+    func transfersChanged() {
+        guard item != nil, !drawPending else { return }
+        let wait = lastDrawn + 0.25 - Date().timeIntervalSince1970
+        guard wait <= 0 else {
+            drawPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                self?.drawPending = false
+                self?.transfersChanged()
+            }
+            return
+        }
+        lastDrawn = Date().timeIntervalSince1970
+        let transfers = Transfers.shared
+        let percent = transfers.items.isEmpty ? nil : Int((transfers.fraction ?? 0) * 100)
+        if percent != shownPercent {
+            shownPercent = percent
+            item?.button?.image = percent.map { StatusMenu.progressIcon(Double($0) / 100, inner: normalIcon) } ?? normalIcon
+        }
+        refresh()
     }
 
     func deviceJoined(_ name: String, isComputer: Bool) {
@@ -77,6 +108,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             menu.addItem(ActionItem(L("Новая комната…", "New Room…"), symbol: "plus.circle") { [weak self] in self?.askNewRoom() })
             menu.addItem(ActionItem(L("Войти в другую комнату…", "Join Another Room…"), symbol: "arrow.right.circle") { [weak self] in self?.showJoin() })
         }
+        addTransfers(to: menu)
         menu.addItem(.separator())
         addHistory(to: menu)
         menu.addItem(.separator())
@@ -149,6 +181,19 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             .foregroundColor: NSColor.secondaryLabelColor,
         ]))
         return text
+    }
+
+    private func addTransfers(to menu: NSMenu) {
+        let items = Transfers.shared.items
+        guard !items.isEmpty else { return }
+        menu.addItem(.separator())
+        for transfer in items {
+            menu.addItem(info(transferLine(transfer), symbol: transfer.incoming ? "arrow.down.circle" : "arrow.up.circle"))
+            let id = transfer.id
+            let cancel = ActionItem(L("Отменить", "Cancel"), symbol: "xmark.circle") { Transfers.shared.cancel(id) }
+            cancel.indentationLevel = 1
+            menu.addItem(cancel)
+        }
     }
 
     private func addHistory(to menu: NSMenu) {
@@ -737,6 +782,31 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
             model.done(L("Новая комната готова. Перезапускаюсь…", "The new room is ready. Restarting…"))
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { restartAgent() }
         }
+    }
+
+    /// The icon a little smaller inside a ring: a faint full circle and an arc from the top, clockwise, for the done share.
+    static func progressIcon(_ fraction: Double, inner: NSImage) -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            let center = NSPoint(x: rect.midX, y: rect.midY)
+            let radius = 8.0
+            let track = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
+            track.lineWidth = 1.5
+            NSColor.black.withAlphaComponent(0.25).setStroke()
+            track.stroke()
+            let share = min(1, max(0, fraction))
+            if share > 0 {
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: center, radius: radius, startAngle: 90, endAngle: 90 - 360 * share, clockwise: true)
+                arc.lineWidth = 1.8
+                arc.lineCapStyle = .round
+                NSColor.black.setStroke()
+                arc.stroke()
+            }
+            inner.draw(in: rect.insetBy(dx: 3.5, dy: 3.5), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 
     static func icon() -> NSImage {
