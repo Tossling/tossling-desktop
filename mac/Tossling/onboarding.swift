@@ -168,7 +168,9 @@ final class OnboardingModel: ObservableObject {
         problem = ""
         status = L("Жду ответа от другого компьютера…", "Waiting for the other computer…")
         step = .working
-        runSelf(["--config", "/dev/null", "--join", address, invite, "--out", out, "--id", existingDeviceID(configPath), "--name", ""]) { [self] code, output in
+        let deviceID = existingDeviceID(configPath)
+        runSelf(["--config", "/dev/null", "--join", address, invite, "--out", out, "--id", deviceID, "--name", "",
+                 "--identity", configPath]) { [self] code, output in
             defer { try? FileManager.default.removeItem(atPath: out) }
             guard code == 0, let data = FileManager.default.contents(atPath: out),
                   let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -177,8 +179,9 @@ final class OnboardingModel: ObservableObject {
                 step = .join
                 return
             }
-            let values: [String: Any] = ["server": normalizedServer(server), "token": token, "room": room, "key": key,
-                                         "device_id": existingDeviceID(configPath), "owner": raw["o"] as? String ?? "", "images": true]
+            var values: [String: Any] = ["server": normalizedServer(server), "token": token, "room": room, "key": key,
+                                         "device_id": deviceID, "owner": raw["o"] as? String ?? "", "images": true]
+            if let identity = raw["identity"] as? String { values["identity"] = identity }
             leaveOwnToken(config: configPath) { [self] in
                 guard writeNewConfig(values, to: configPath) else {
                     problem = L("Не записал настройки в \(configPath)", "Could not save the settings to \(configPath)")

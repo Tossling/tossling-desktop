@@ -33,6 +33,7 @@ var joinOut = ""
 var sendNotify = false
 var joinID = ""
 var joinName = ""
+var joinIdentityFile = ""
 
 let launchedBare = CommandLine.arguments.count == 1 || CommandLine.arguments.dropFirst().allSatisfy { $0.hasPrefix("-psn") }
 let agentMode = CommandLine.arguments.contains("--agent")
@@ -65,6 +66,7 @@ while let arg = argv.next() {
     case "--notify": sendNotify = true
     case "--id": joinID = argv.next() ?? ""
     case "--name": joinName = argv.next() ?? ""
+    case "--identity": joinIdentityFile = argv.next() ?? ""
     case "--setup": setupServer = argv.next() ?? ""
     default: break
     }
@@ -492,6 +494,22 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     paths.note(offline)
     paths.note(otherWifi)
     check("network: Wi-Fi dropping and coming back reconnects", paths.settle())
+    let joiner = Curve25519.KeyAgreement.PrivateKey()
+    let joinerPK = joiner.publicKey.rawRepresentation.base64EncodedString()
+    let hello = joinHello(name: "Studio", id: "0123456789abcdef", invite: "tossling-inv-abc", publicKey: joinerPK, now: 1_791_360_000)
+    check("join: the hello is a re hello with this Mac's key", hello["k"] as? String == "hello" && hello["re"] as? Bool == true
+          && hello["pk"] as? String == joinerPK && hello["id"] as? String == "0123456789abcdef" && hello["inv"] as? String == "tossling-inv-abc")
+    check("join: the hello carries ts and mid", (hello["ts"] as? Int64) == 1_791_360_000_000 && messageID(hello["mid"]) != nil)
+    check("join: the others take the key from a fresh join hello", updatedKeys(["pk": pkA, "first_pk": pkA], offered: joinerPK,
+          renew: hello["re"] as? Bool == true && contentAge(eventTime: 1_791_360_001, ts: hello["ts"], now: 1_791_360_002) < staleAfter, now: 5)["pk"] as? String == joinerPK)
+    check("join: no key, no pk", joinHello(name: "Studio", id: "", invite: "t", publicKey: "")["pk"] == nil
+          && joinHello(name: "Studio", id: "", invite: "t", publicKey: "")["id"] == nil)
+    let joinFile = scratch.appendingPathComponent("join.json").path
+    try? JSONSerialization.data(withJSONObject: ["identity": joiner.rawRepresentation.base64EncodedString()]).write(to: URL(fileURLWithPath: joinFile))
+    let savedIdentity = joinIdentity(config: joinFile)
+    check("join: the identity in the settings is announced", !savedIdentity.made && savedIdentity.key.publicKey.rawRepresentation == joiner.publicKey.rawRepresentation)
+    let newIdentity = joinIdentity(config: scratch.appendingPathComponent("none.json").path)
+    check("join: without settings a new identity is made", newIdentity.made && newIdentity.key.publicKey.rawRepresentation != joiner.publicKey.rawRepresentation)
     try? FileManager.default.removeItem(at: scratch)
     exit(failed == 0 ? 0 : 1)
 }
@@ -632,6 +650,25 @@ func trimmedServer(_ server: String) -> String {
     server.hasSuffix("/") ? String(server.dropLast()) : server
 }
 
+/// The identity a joining Mac announces: the one in its settings, or a new one (`made`) the caller then saves.
+func joinIdentity(config path: String) -> (key: Curve25519.KeyAgreement.PrivateKey, made: Bool) {
+    if let text = readConfigFile(path)?["identity"] as? String, let data = Data(base64Encoded: text),
+       let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: data) {
+        return (key, false)
+    }
+    return (Curve25519.KeyAgreement.PrivateKey(), true)
+}
+
+/// The hello a Mac sends into the room it has just joined with an invite code: `re` with its public key, so the
+/// others take this key in place of one they knew from before a reinstall, and `inv` for the inviter.
+func joinHello(name: String, id: String, invite topic: String, publicKey: String, now: Double = Date().timeIntervalSince1970) -> [String: Any] {
+    var meta: [String: Any] = ["k": "hello", "m": "text/plain", "src": "mac", "n": name, "inv": topic, "re": true]
+    if !id.isEmpty { meta["id"] = id }
+    if !publicKey.isEmpty { meta["pk"] = publicKey }
+    stampMessage(&meta, now: now)
+    return meta
+}
+
 if !joinCode.isEmpty {
     let server = trimmedServer(joinServer.hasPrefix("http") ? joinServer : "https://" + joinServer)
     guard let secret = inviteSecret(joinCode) else {
@@ -670,15 +707,21 @@ if !joinCode.isEmpty {
         print(L("приглашение устарело: на первом Mac — tossling invite", "the invite has expired: run tossling invite on the first Mac again"))
         exit(4)
     }
+    // Without --identity (an older caller) the hello goes without a key, as before: a key the caller would not save
+    // would only mislead the others.
+    let identity = joinIdentityFile.isEmpty ? nil : joinIdentity(config: joinIdentityFile)
+    if identity?.made == true {
+        invite["identity"] = identity?.key.rawRepresentation.base64EncodedString()
+        plain = (try? JSONSerialization.data(withJSONObject: invite)) ?? plain
+    }
     let fd = open(joinOut, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
     guard fd >= 0 else { exit(1) }
     _ = plain.withUnsafeBytes { write(fd, $0.baseAddress, plain.count) }
     close(fd)
     if let room = invite["r"] as? String, let keyText = invite["k"] as? String, let roomKey = Data(base64Encoded: keyText),
        let target = URL(string: "\(trimmedServer(invite["s"] as? String ?? server))/\(room)") {
-        var meta: [String: Any] = ["k": "hello", "m": "text/plain", "src": "mac", "n": joinName.isEmpty ? computerName : joinName, "inv": topic, "re": true]
-        if !joinID.isEmpty { meta["id"] = joinID }
-        stampMessage(&meta)
+        let meta = joinHello(name: joinName.isEmpty ? computerName : joinName, id: joinID, invite: topic,
+                             publicKey: identity?.key.publicKey.rawRepresentation.base64EncodedString() ?? "")
         if let metaJSON = try? JSONSerialization.data(withJSONObject: meta),
            let sealedMeta = try? AES.GCM.seal(metaJSON, using: SymmetricKey(data: roomKey)).combined {
             var hello = URLRequest(url: target)

@@ -503,7 +503,7 @@ def join():
     out = os.path.join(CONFIG_DIR, "join.tmp")
     try:
         r = subprocess.run([agent.bin, "--config", "/dev/null", "--join", server, code, "--out", out,
-                            "--id", device_id, "--name", old.get("name", "")],
+                            "--id", device_id, "--name", old.get("name", ""), "--identity", CONFIG],
                            capture_output=True, text=True, timeout=120)
         if r.returncode != 0 or not os.path.exists(out):
             sys.exit(t(f"{BAD} {r.stdout.strip() or r.stderr.strip() or 'не получилось'}", f"{BAD} {r.stdout.strip() or r.stderr.strip() or 'did not work'}"))
@@ -517,6 +517,8 @@ def join():
     conf = {"server": normalize_server(invite["s"]), "token": invite["t"], "room": invite["r"], "key": invite["k"],
             "device_id": device_id, "owner": invite.get("o", ""), "images": old.get("images", True)}
     conf.update({k: old[k] for k in ("name", "aliases", "identity", "notify_app") if old.get(k)})
+    if invite.get("identity"):
+        conf["identity"] = invite["identity"]
     drop_own(old)
     save_conf(conf)
     own_token()

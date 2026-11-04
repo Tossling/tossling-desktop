@@ -663,7 +663,8 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                               note: L("Другой компьютер передает ключ комнаты, зашифрованный кодом.", "The other computer sends the room key, encrypted with the code."),
                               status: L("Жду ответа от другого компьютера…", "Waiting for the other computer…"))
         var answer = ""
-        inviteProcess = helperCommand(["--config", "/dev/null", "--join", address, code, "--out", out, "--id", conf.deviceID, "--name", conf.deviceName],
+        inviteProcess = helperCommand(["--config", "/dev/null", "--join", address, code, "--out", out, "--id", conf.deviceID, "--name", conf.deviceName,
+                                       "--identity", configFile],
                                       output: { answer = $0 }) { status in
             defer { try? FileManager.default.removeItem(atPath: out) }
             guard status == 0, let data = FileManager.default.contents(atPath: out),
@@ -681,6 +682,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
                     config["key"] = key
                     config["owner"] = raw["o"] as? String ?? ""
                     config["device_id"] = conf.deviceID
+                    if let identity = raw["identity"] as? String { config["identity"] = identity }
                     config["legacy_to_mac"] = ""
                     config["legacy_to_phone"] = ""
                 }
