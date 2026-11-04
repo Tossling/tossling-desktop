@@ -13,6 +13,7 @@ let streamChunk = 1 << 20
 let streamMagic = Data("TSY2".utf8)
 let bigFile: Int64 = 5_000_000
 let inlineLimit = 2_400
+let messageLimit = 4_096
 let staleAfter = 15.0 * 60
 let fileStaleAfter = 3.0 * 60 * 60
 let gone = L("сервер его уже удалил, отправьте ещё раз", "the server has already deleted it, send it again")
@@ -197,6 +198,11 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
         check(name + " seal", sealedWith(plain, key, nonce) == v["sealed"])
         check(name + " open", opened(v["sealed"] ?? "", key) == plain)
     }
+    let inlineKey = SymmetricKey(size: .bits256)
+    let inlineMeta: [String: Any] = ["k": "text", "m": "text/plain", "src": "mac", "n": "Selftest Mac", "id": "0123456789abcdef"]
+    check("inline text", sealedInline(inlineMeta, text: String(repeating: "x", count: inlineLimit), key: inlineKey) != nil)
+    check("inline text over the message limit after escaping",
+          sealedInline(inlineMeta, text: String(repeating: "\"", count: inlineLimit), key: inlineKey) == nil)
     let gateFile = scratch.appendingPathComponent("refusals.json").path
     var now = 1_000_000.0
     let gate = Gate(file: gateFile)
@@ -657,6 +663,17 @@ func seal(_ data: Data) -> Data? {
     try? AES.GCM.seal(data, using: conf.key).combined
 }
 
+// ntfy keeps a body of up to 4,096 bytes as the message and turns a longer one into an attachment that no receiver
+// can open. Escaping, encryption and Base64 can take 2,400 bytes of text past that, so the sealed envelope decides.
+func sealedInline(_ meta: [String: Any], text: String, key: SymmetricKey) -> Data? {
+    var inline = meta
+    inline["v"] = text
+    guard let json = try? JSONSerialization.data(withJSONObject: inline),
+          let sealed = try? AES.GCM.seal(json, using: key).combined,
+          sealed.base64EncodedString().utf8.count <= messageLimit else { return nil }
+    return sealed
+}
+
 func unseal(_ data: Data) -> Data? {
     guard let box = try? AES.GCM.SealedBox(combined: data) else { return nil }
     return try? AES.GCM.open(box, using: conf.key)
@@ -831,12 +848,15 @@ func publish(kind: String, mime: String, data: Data, text: String?, topic: Strin
     if !["text", "image", "file"].contains(kind), !conf.publicKey.isEmpty { meta["pk"] = conf.publicKey }
     meta.merge(extra) { _, new in new }
     var body: Data? = nil
+    var envelope: Data? = nil
     if let text = text, data.count <= inlineLimit {
-        meta["v"] = text
-    } else {
-        body = seal(data)
+        envelope = sealedInline(meta, text: text, key: conf.key)
     }
-    guard let metaJSON = try? JSONSerialization.data(withJSONObject: meta), let sealedMeta = seal(metaJSON) else {
+    if envelope == nil {
+        body = seal(data)
+        envelope = (try? JSONSerialization.data(withJSONObject: meta)).flatMap(seal)
+    }
+    guard let sealedMeta = envelope else {
         done?(false)
         return
     }
