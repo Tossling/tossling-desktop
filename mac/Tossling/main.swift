@@ -425,6 +425,9 @@ if let at = CommandLine.arguments.firstIndex(of: "--selftest"), at + 1 < Command
     check("transfers: no fraction without a size", transferFraction([]) == nil
           && transferFraction([TransferInfo(id: "c", name: "x", incoming: true, done: 5, total: 0, state: .active, pid: 1)]) == nil)
     check("transfers: done over total counts as total", transferFraction([TransferInfo(id: "c", name: "x", incoming: true, done: 50, total: 10, state: .active, pid: 1)]) == 1)
+    check("updates: install only with no transfer, the menu closed and no window open", updateCanInstall(transfers: 0, menuOpen: false, windowOpen: false)
+          && !updateCanInstall(transfers: 1, menuOpen: false, windowOpen: false) && !updateCanInstall(transfers: 0, menuOpen: true, windowOpen: false)
+          && !updateCanInstall(transfers: 0, menuOpen: false, windowOpen: true))
     check("transfers: the first update and the final state always go out", shouldPostTransfer(lastAt: nil, now: 100, final: false)
           && shouldPostTransfer(lastAt: 100, now: 100.01, final: true))
     check("transfers: updates go out about 4 times a second", !shouldPostTransfer(lastAt: 100, now: 100.2, final: false)
