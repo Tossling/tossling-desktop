@@ -49,7 +49,7 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var lastDrawn = 0.0
     private var drawPending = false
     /// While the menu is open its transfer lines follow the model: the item they go after, their separator and rows.
-    private var menuOpen = false
+    private(set) var menuOpen = false
     private var transferAnchor: NSMenuItem?
     private var transferSeparator: NSMenuItem?
     private var transferRows = [(id: String, line: NSMenuItem, cancel: NSMenuItem)]()

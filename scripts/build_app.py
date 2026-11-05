@@ -152,7 +152,7 @@ def build():
         plistlib.dump({**common, "CFBundleIdentifier": BUNDLE_ID, "CFBundleName": "Tossling", "CFBundleDisplayName": "Tossling",
                        "CFBundleExecutable": "Tossling", "CFBundlePackageType": "APPL", "LSUIElement": True,
                        "TosslingServiceLabel": AGENT_LABEL, "TosslingDistribution": True,
-                       **({"SUFeedURL": FEED_URL, "SUPublicEDKey": SPARKLE_PUBLIC_KEY, "SUEnableAutomaticChecks": True} if SPARKLE_PUBLIC_KEY else {}),
+                       **({"SUFeedURL": FEED_URL, "SUPublicEDKey": SPARKLE_PUBLIC_KEY, "SUEnableAutomaticChecks": True, "SUAutomaticallyUpdate": True} if SPARKLE_PUBLIC_KEY else {}),
                        "CFBundleURLTypes": [{"CFBundleURLName": BUNDLE_ID, "CFBundleURLSchemes": ["tossling"]}]}, f)
     with open(os.path.join(appex, "Contents", "Info.plist"), "wb") as f:
         plistlib.dump({**common, "CFBundleIdentifier": EXT_ID, "CFBundleName": "Tossling", "CFBundleDisplayName": "Tossling",
