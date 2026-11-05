@@ -64,8 +64,9 @@ On a Mac download `Tossling-<version>.dmg` from [Releases](https://github.com/to
 signed and notarized. On the first start it asks for the server address and the token, or for an invite code from
 another computer, and then shows a QR code for the phone. After that it lives in the menu bar.
 
-Since 0.3 updates come by themselves. At start and once a day the app looks for a new version through Sparkle and
-offers it in the menu, and "Check for Updates…" asks right away. Updates are signed with Tossling's update key and the
+Updates come through Sparkle. At start and once a day the app looks for a new version and downloads it. Since 0.7.1 it
+then installs the update and restarts as soon as no file is being sent or received and its menu and windows are closed.
+"Check for Updates…" in the menu asks right away. Updates are signed with Tossling's update key and the
 same Developer ID. Builds from source do not update this way.
 
 The `tossling` command comes with the app. Homebrew puts it into its `bin`, otherwise the app links it as
